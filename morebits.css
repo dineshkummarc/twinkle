@@ -40,7 +40,6 @@ form.quickform
 form.quickform *
 {
 	font-family: sans-serif;
-	vertical-align: middle;
 }
 
 form.quickform fieldset
@@ -66,6 +65,20 @@ form.quickform select
 	margin-left: .2em;
 }
 
+form.quickform input[type=checkbox],
+form.quickform input[type=radio] {
+	height: 13px;
+	margin-bottom: 2px;
+	margin-top: 2px;
+	padding: 0;
+	width: 13px;
+	vertical-align: top;
+}
+
+form.quickform div {
+	line-height: 18px;
+}
+
 form.quickform h5
 {
 	margin: .5em 0 0;
@@ -73,7 +86,7 @@ form.quickform h5
 }
 
 /* only give the top border to headers with something above them */
-form.quickform div + h5, form.quickform div + div h5, form.quickform h5 + h5
+form.quickform div + h5, form.quickform div + div > h5, form.quickform h5 + h5
 {
 	border-top: 1px solid #88A;
 }
@@ -85,9 +98,20 @@ form.quickform textarea
 	font-size: 150%;
 }
 
+form.quickform input:disabled + label
+{
+	color: gray;
+}
+
 form.quickform span.quickformDescription
 {
 	font-style: italic;
+}
+
+form.quickform .quickformSubgroup
+{
+	margin-bottom: .5em;
+	margin-left: 3em;
 }
 
 form.quickform .tooltipButtonContainer
@@ -105,9 +129,9 @@ form.quickform .tooltipButton
 }
 
 
-/* Scrollbox styles, for use within Morebits.quickForm */
+/* Scrollbox styles, for use within Morebits.simpleWindow */
 
-div.quickform-scrollbox
+div.morebits-scrollbox
 {
 	background: white;
 	border: 1px solid gray;
@@ -118,14 +142,14 @@ div.quickform-scrollbox
 	padding: 6px 6px 0;
 }
 
-div.quickform-scrollbox h5:first-child
+div.morebits-scrollbox > h5:first-child
 {
 	border: none;
 	margin-top: 0;
 	padding-top: 0;
 }
 
-div.quickform-scrollbox :last-child
+div.morebits-scrollbox > :last-child
 {
 	margin-bottom: 6px;
 }
@@ -147,7 +171,7 @@ div.morebits-previewbox *:not(img)
 	vertical-align: baseline;
 }
 
-div.morebits-previewbox span.editsection
+div.morebits-previewbox .mw-editsection
 {
 	display: none;
 }
@@ -156,25 +180,6 @@ div.morebits-previewbox span.editsection
 
 
 /* Portlet */
-
-.skin-vector div div.extraMenu h5 span {
-	background-position: 90% 50%;
-}
-
-.skin-vector div.extraMenu h5 a {
-	padding-left: .4em;
-	padding-right: .4em;
-	width: auto;
-}
-
-.skin-vector div.extraMenu h5 a span {
-	display: inline-block;
-	font-size: .8em;
-	height: 2.5em;
-	font-weight: normal;
-	padding-top: 1.25em;
-	margin-right: 14px;
-}
 
 .skin-modern #mw_contentwrapper div.portlet {
 	overflow: hidden;
@@ -232,7 +237,13 @@ body .ui-dialog.morebits-dialog .ui-dialog-titlebar {
 	height: 1em;
 	background: repeat-x 50% 80% #cfd6e1 !important;  /* the actual image is specified in morebits.js - ResourceLoader mangles data: URIs in CSS */
 	font: bold 1em sans-serif;
+	overflow: hidden;
 	padding: .4em .3em .5em !important;
+	white-space: nowrap;
+}
+
+body.skin-monobook .morebits-dialog .ui-dialog-titlebar {
+	line-height: 1em;
 }
 
 .morebits-dialog-scriptname {
@@ -266,8 +277,6 @@ body .ui-dialog.morebits-dialog .ui-dialog-buttonpane {
 body .ui-dialog.morebits-dialog .ui-dialog-buttonpane button {
 	float: none;
 	margin: .2em 0 -.1em;
-	padding-top: 0;
-	padding-bottom: 0;
 	cursor: auto;
 }
 
@@ -287,6 +296,10 @@ body .ui-dialog.morebits-dialog .morebits-dialog-footerlinks a {
 
 .ui-dialog.morebits-dialog a, .ui-dialog.morebits-dialog .ui-widget-content a {
 	color: #0645AD;  /* jQuery imposes a ridiculous nearly-black colour on <a> tags... I don't understand it */
+}
+
+.ui-icon {
+	vertical-align: -3px;
 }
 
 .ui-icon-inline {

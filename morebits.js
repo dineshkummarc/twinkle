@@ -19,7 +19,7 @@
  *   - Morebits.quickForm tooltips rely on Tipsy (ResourceLoader module name 'jquery.tipsy').
  *     For external installations, Tipsy is available at [http://onehackoranother.com/projects/jquery/tipsy].
  *   - To create a gadget based on morebits.js, use this syntax in MediaWiki:Gadgets-definition:
- *       * GadgetName[ResourceLoader|dependencies=mediawiki.util,jquery.ui.dialog,jquery.tipsy]|morebits.js|morebits.css|GadgetName.js
+ *       * GadgetName[ResourceLoader|dependencies=mediawiki.user,mediawiki.util,mediawiki.RegExp,jquery.ui.dialog,jquery.tipsy]|morebits.js|morebits.css|GadgetName.js
  *
  * Most of the stuff here doesn't work on IE < 9.  It is your script's responsibility to enforce this.
  *
@@ -43,7 +43,7 @@ window.Morebits = Morebits;  // allow global access
 
 Morebits.userIsInGroup = function ( group ) {
 	return $.inArray(group, mw.config.get( 'wgUserGroups' )) !== -1;
-}
+};
 
 
 
@@ -51,25 +51,74 @@ Morebits.userIsInGroup = function ( group ) {
  * **************** Morebits.isIPAddress() ****************
  * Helper function: Returns true if given string contains a valid IPv4 or
  * IPv6 address
- *
- * This is copied from mediaWiki.util
  */
 
-Morebits.RE_IP_ADD = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|0?[0-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|0?[0-9]?[0-9])$/;
-Morebits.RE_IPV6_ADD = /^(?::(?::|(?::[0-9A-Fa-f]{1,4}){1,7})|[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6}::|[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){7})$/;
-Morebits.RE_IPV6_ADD2 = /^[0-9A-Fa-f]{1,4}(?:::?[0-9A-Fa-f]{1,4}){1,6}$/;
-
 Morebits.isIPAddress = function ( address ) {
-	return address.search( Morebits.RE_IP_ADD ) !== -1 ||  // IPv4
-		address.search( Morebits.RE_IPV6_ADD ) !== -1 ||  // IPv6
-		(address.search( Morebits.RE_IPV6_ADD2 ) !== -1	&& address.search( /::/ ) !== -1 && address.search( /::.*::/ ) === -1);
-}
+	return mw.util.isIPv4Address(address) || mw.util.isIPv6Address(address);
+};
+
+
+
+/**
+ * **************** Morebits.sanitizeIPv6() ****************
+ * JavaScript translation of the MediaWiki core function IP::sanitizeIP() in
+ * includes/utils/IP.php.
+ * Converts an IPv6 address to the canonical form stored and used by MediaWiki.
+ */
+
+Morebits.sanitizeIPv6 = function ( address ) {
+	address = address.trim();
+	if ( address === '' ) {
+		return null;
+	}
+	if ( mw.util.isIPv4Address( address ) || !mw.util.isIPv6Address( address ) ) {
+		return address; // nothing else to do for IPv4 addresses or invalid ones
+	}
+	// Remove any whitespaces, convert to upper case
+	address = address.toUpperCase();
+	// Expand zero abbreviations
+	var abbrevPos = address.indexOf( '::' );
+	if ( abbrevPos > -1 ) {
+		// We know this is valid IPv6. Find the last index of the
+		// address before any CIDR number (e.g. "a:b:c::/24").
+		var CIDRStart = address.indexOf( '/' );
+		var addressEnd = ( CIDRStart > -1 ) ? CIDRStart - 1 : address.length - 1;
+		// If the '::' is at the beginning...
+		var repeat, extra, pad;
+		if ( abbrevPos === 0 ) {
+			repeat = '0:';
+			extra = ( address == '::' ) ? '0' : ''; // for the address '::'
+			pad = 9; // 7+2 (due to '::')
+		// If the '::' is at the end...
+		} else if ( abbrevPos === ( addressEnd - 1 ) ) {
+			repeat = ':0';
+			extra = '';
+			pad = 9; // 7+2 (due to '::')
+		// If the '::' is in the middle...
+		} else {
+			repeat = ':0';
+			extra = ':';
+			pad = 8; // 6+2 (due to '::')
+		}
+		var replacement = repeat;
+		pad -= address.split( ':' ).length - 1;
+		for ( var i = 1; i < pad; i++ ) {
+			replacement += repeat;
+		}
+		replacement += extra;
+		address = address.replace( '::', replacement );
+	}
+	// Remove leading zeros from each bloc as needed
+	address = address.replace( /(^|:)0+([0-9A-Fa-f]{1,4})/g, '$1$2' );
+
+	return address;
+};
 
 
 
 /**
  * **************** Morebits.quickForm ****************
- * Morebits.quickForm is a class for creation of simple and standard forms without much 
+ * Morebits.quickForm is a class for creation of simple and standard forms without much
  * specific coding.
  *
  * Index to Morebits.quickForm element types:
@@ -104,8 +153,10 @@ Morebits.isIPAddress = function ( address ) {
  *              - Attributes: name, label, disabled, event
  *   textarea  A big, multi-line text box.
  *              - Attributes: name, label, value, cols, rows, disabled, readonly
+ *   fragment  A DocumentFragment object.
+ *              - No attributes, and no global attributes except adminonly
  *
- * Global attributes: id, style, tooltip, extra, adminonly
+ * Global attributes: id, className, style, tooltip, extra, adminonly
  */
 
 Morebits.quickForm = function QuickForm( event, eventType ) {
@@ -141,10 +192,12 @@ Morebits.quickForm.element.prototype.append = function QuickFormElementAppend( d
 	return child;
 };
 
-Morebits.quickForm.element.prototype.render = function QuickFormElementRender() {
-	var currentNode = this.compute( this.data );
+// This should be called without parameters: form.render()
+Morebits.quickForm.element.prototype.render = function QuickFormElementRender( internal_subgroup_id ) {
+	var currentNode = this.compute( this.data, internal_subgroup_id );
 
 	for( var i = 0; i < this.childs.length; ++i ) {
+		// do not pass internal_subgroup_id to recursive calls
 		currentNode[1].appendChild( this.childs[i].render() );
 	}
 	return currentNode[0];
@@ -164,13 +217,16 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 	switch( data.type ) {
 	case 'form':
 		node = document.createElement( 'form' );
-		node.setAttribute( 'name', 'id' );
 		node.className = "quickform";
 		node.setAttribute( 'action', 'javascript:void(0);');
 		if( data.event ) {
 			node.addEventListener( data.eventType || 'submit', data.event , false );
 		}
 		break;
+	case 'fragment':
+		node = document.createDocumentFragment();
+		// fragments can't have any attributes, so just return it straight away
+		return [ node, node ];
 	case 'select':
 		node = document.createElement( 'div' );
 
@@ -276,27 +332,40 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 				if( current.disabled ) {
 					subnode.setAttribute( 'disabled', 'disabled' );
 				}
-				if( data.event ) {
-					subnode.addEventListener( 'change', data.event, false );
-				} else if ( current.event ) {
-					subnode.addEventListener( 'change', current.event, true );
-				}
 				label = cur_div.appendChild( document.createElement( 'label' ) );
 				label.appendChild( document.createTextNode( current.label ) );
 				label.setAttribute( 'for', cur_id );
 				if( current.tooltip ) {
 					Morebits.quickForm.element.generateTooltip( label, current );
 				}
+				// styles go on the label, doesn't make sense to style a checkbox/radio
+				if( current.style ) {
+					label.setAttribute( 'style', current.style );
+				}
+
 				var event;
 				if( current.subgroup ) {
-					var tmpgroup = $.extend({}, current.subgroup);
-					if( ! tmpgroup.type ) {
-						tmpgroup.type = data.type;
-					}
-					tmpgroup.name = (current.name || data.name) + '.' + tmpgroup.name;
+					var tmpgroup = current.subgroup;
 
-					var subgroup = this.compute( tmpgroup, cur_id )[0];
-					subgroup.style.marginLeft = '3em';
+					if( ! $.isArray( tmpgroup ) ) {
+						tmpgroup = [ tmpgroup ];
+					}
+
+					var subgroupRaw = new Morebits.quickForm.element({
+						type: 'div',
+						id: id + '_' + i + '_subgroup'
+					});
+					$.each( tmpgroup, function( idx, el ) {
+						var newEl = $.extend( {}, el );
+						if( ! newEl.type ) {
+							newEl.type = data.type;
+						}
+						newEl.name = (current.name || data.name) + '.' + newEl.name;
+						subgroupRaw.append( newEl );
+					} );
+
+					var subgroup = subgroupRaw.render( cur_id );
+					subgroup.className = "quickformSubgroup";
 					subnode.subgroup = subgroup;
 					subnode.shown = false;
 
@@ -326,15 +395,22 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 								e.target.form.names[name].parentNode.removeChild( e.target.form.names[name].subgroup );
 							}
 							delete e.target.form.names[name];
-						} 
+						}
 					};
 					subnode.addEventListener( 'change', event, true );
+				}
+				// add users' event last, so it can interact with the subgroup
+				if( data.event ) {
+					subnode.addEventListener( 'change', data.event, false );
+				} else if ( current.event ) {
+					subnode.addEventListener( 'change', current.event, true );
 				}
 			}
 		}
 		break;
 	case 'input':
 		node = document.createElement( 'div' );
+		node.setAttribute( 'id', 'div_' + id );
 
 		if( data.label ) {
 			label = node.appendChild( document.createElement( 'label' ) );
@@ -347,6 +423,7 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 			subnode.setAttribute( 'value', data.value );
 		}
 		subnode.setAttribute( 'name', data.name );
+		subnode.setAttribute( 'id', id );
 		subnode.setAttribute( 'type', 'text' );
 		if( data.size ) {
 			subnode.setAttribute( 'size', data.size );
@@ -380,7 +457,6 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 				label: 'more',
 				disabled: min >= max,
 				event: function(e) {
-					var area = e.target.area;
 					var new_node =  new Morebits.quickForm.element( e.target.sublist );
 					e.target.area.appendChild( new_node.render() );
 
@@ -525,10 +601,12 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 		break;
 	case 'textarea':
 		node = document.createElement( 'div' );
+		node.setAttribute( 'id', 'div_' + id );
 		if( data.label ) {
 			label = node.appendChild( document.createElement( 'h5' ) );
 			label.appendChild( document.createTextNode( data.label ) );
-			label.setAttribute( 'for', id );
+			// TODO need to nest a <label> tag in here without creating extra vertical space
+			//label.setAttribute( 'for', id );
 		}
 		subnode = node.appendChild( document.createElement( 'textarea' ) );
 		subnode.setAttribute( 'name', data.name );
@@ -554,7 +632,7 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 
 	if( !childContainder ) {
 		childContainder = node;
-	} 
+	}
 	if( data.tooltip ) {
 		Morebits.quickForm.element.generateTooltip( label || node , data );
 	}
@@ -565,9 +643,18 @@ Morebits.quickForm.element.prototype.compute = function QuickFormElementCompute(
 	if( data.style ) {
 		childContainder.setAttribute( 'style', data.style );
 	}
+	if( data.className ) {
+		childContainder.className = ( childContainder.className ?
+			childContainder.className + " " + data.className :
+			data.className );
+	}
 	childContainder.setAttribute( 'id', data.id || id );
 
 	return [ node, childContainder ];
+};
+
+Morebits.quickForm.element.autoNWSW = function() {
+	return $(this).offset().top > ($(document).scrollTop() + $(window).height() / 2) ? 'sw' : 'nw';
 };
 
 Morebits.quickForm.element.generateTooltip = function QuickFormElementGenerateTooltip( node, data ) {
@@ -576,7 +663,8 @@ Morebits.quickForm.element.generateTooltip = function QuickFormElementGenerateTo
 		}).appendTo(node).tipsy({
 			'fallback': data.tooltip,
 			'fade': true,
-			'gravity': $.fn.tipsy.autoWE,
+			'gravity': (data.type === "input" || data.type === "select") ?
+				Morebits.quickForm.element.autoNWSW : $.fn.tipsy.autoWE,
 			'html': true,
 			'delayOut': 250
 		});
@@ -720,7 +808,7 @@ Morebits.quickForm.setElementTooltipVisibility = function QuickFormSetElementToo
 /**
  * **************** HTMLFormElement ****************
  *
- * getChecked: 
+ * getChecked:
  *   XXX Doesn't seem to work reliably across all browsers at the moment. -- see getChecked2 in twinkleunlink.js, which is better
  *
  *   Returns an array containing the values of elements with the given name, that has it's
@@ -732,7 +820,7 @@ Morebits.quickForm.setElementTooltipVisibility = function QuickFormSetElementToo
 
 HTMLFormElement.prototype.getChecked = function( name, type ) {
 	var elements = this.elements[name];
-	if( !elements ) { 
+	if( !elements ) {
 		// if the element doesn't exists, return null.
 		return null;
 	}
@@ -782,15 +870,9 @@ HTMLFormElement.prototype.getChecked = function( name, type ) {
  */
 
 RegExp.escape = function( text, space_fix ) {
-
-	if ( !arguments.callee.sRE ) {
-		arguments.callee.sRE = /(\/|\.|\*|\+|\?|\||\(|\)|\[|\]|\{|\}|\\|\$|\^)/g;
-	}
-
-	text = text.replace( arguments.callee.sRE , '\\$1' );
+	text = mw.RegExp.escape(text);
 
 	// Special MediaWiki escape - underscore/space are often equivalent
-
 	if( space_fix ) {
 		text = text.replace( / |_/g, '[_ ]' );
 	}
@@ -891,22 +973,20 @@ Morebits.bytes.prototype.toString = function( magnitude ) {
  */
 
 if (!String.prototype.trimLeft) {
-	String.prototype.trimLeft = function stringPrototypeLtrim( chars ) {
-		chars = chars || "\\s";
-		return this.replace( new RegExp("^[" + chars + "]+", "g"), "" );
+	String.prototype.trimLeft = function stringPrototypeLtrim( ) {
+		return this.replace( /^[\s]+/g, "" );
 	};
 }
 
 if (!String.prototype.trimRight) {
-	String.prototype.trimRight = function stringPrototypeRtrim( chars ) {
-		chars = chars || "\\s";
-		return this.replace( new RegExp("[" + chars + "]+$", "g"), "" );
+	String.prototype.trimRight = function stringPrototypeRtrim( ) {
+		return this.replace( /[\s]+$/g, "" );
 	};
 }
 
 if (!String.prototype.trim) {
-	String.prototype.trim = function stringPrototypeTrim( chars ) {
-		return this.trimRight(chars).trimLeft(chars);
+	String.prototype.trim = function stringPrototypeTrim( ) {
+		return this.trimRight().trimLeft();
 	};
 }
 
@@ -953,13 +1033,21 @@ Morebits.string = {
 				--level;
 				i += end.length - 1;
 			}
-			if( !level && initial ) {
+			if( !level && initial !== null ) {
 				result.push( str.substring( initial, i + 1 ) );
 				initial = null;
 			}
 		}
 
 		return result;
+	},
+	// for deletion/other templates taking a freeform "reason" from a textarea (e.g. PROD, XFD, RPP)
+	formatReasonText: function( str ) {
+		var result = str.toString().trimRight();
+		var unbinder = new Morebits.unbinder(result);
+		unbinder.unbind("<no" + "wiki>", "</no" + "wiki>");
+		unbinder.content = unbinder.content.replace(/\|/g, "{{subst:!}}");
+		return unbinder.rebind();
 	}
 };
 
@@ -1030,24 +1118,11 @@ Morebits.array = {
 
 
 /**
- * **************** Morebits.getPageAssociatedUser ****************
- * Get the user associated with the currently-viewed page.
- * Currently works on User:, User talk:, Special:Contributions.
+ * **************** Morebits.pageNameNorm ****************
+ * Stores a normalized version of the wgPageName variable (underscores converted to spaces).
+ * For queen/king/whatever and country!
  */
-
-Morebits.getPageAssociatedUser = function(){
-	var thisNamespaceId = mw.config.get('wgNamespaceNumber');
-
-	if ( thisNamespaceId === 2 /* User: */ || thisNamespaceId === 3 /* User talk: */ ) {
-		return mw.config.get('wgTitle').split( '/' )[0];  // only first part before any slashes, to work on subpages
-	}
-
-	if ( thisNamespaceId === -1 /* Special: */ && mw.config.get('wgCanonicalSpecialPageName') === "Contributions" ) {
-		return $('table.mw-contributions-table input[name="target"]')[0].getAttribute('value');
-	}
-
-	return false;
-};
+Morebits.pageNameNorm = mw.config.get('wgPageName').replace(/_/g, ' ');
 
 
 
@@ -1065,7 +1140,7 @@ Morebits.unbinder = function Unbinder( string ) {
 	this.history = {};
 	this.prefix = '%UNIQ::' + Math.random() + '::';
 	this.postfix = '::UNIQ%';
-}
+};
 
 Morebits.unbinder.prototype = {
 	unbind: function UnbinderUnbind( prefix, postfix ) {
@@ -1090,7 +1165,7 @@ Morebits.unbinder.prototype = {
 };
 
 Morebits.unbinder.getCallback = function UnbinderGetCallback(self) {
-	return function UnbinderCallback( match , a , b ) {
+	return function UnbinderCallback( match ) {
 		var current = self.prefix + self.counter + self.postfix;
 		self.history[current] = match;
 		++self.counter;
@@ -1185,7 +1260,15 @@ Morebits.wikipedia.namespaces = {
 	'100': 'Portal',
 	'101': 'Portal talk',
 	'108': 'Book',
-	'109': 'Book talk'
+	'109': 'Book talk',
+	'118': 'Draft',
+	'119': 'Draft talk',
+	'446': 'Education Program',
+	'447': 'Education Program talk',
+	'710': 'TimedText',
+	'711': 'TimedText talk',
+	'828': 'Module',
+	'829': 'Module talk'
 };
 
 Morebits.wikipedia.namespacesFriendly = {
@@ -1208,7 +1291,15 @@ Morebits.wikipedia.namespacesFriendly = {
 	'100': 'Portal',
 	'101': 'Portal talk',
 	'108': 'Book',
-	'109': 'Book talk'
+	'109': 'Book talk',
+	'118': 'Draft',
+	'119': 'Draft talk',
+	'446': 'Education Program',
+	'447': 'Education Program talk',
+	'710': 'TimedText',
+	'711': 'TimedText talk',
+	'828': 'Module',
+	'829': 'Module talk'
 };
 
 
@@ -1220,10 +1311,10 @@ Morebits.wikipedia.namespacesFriendly = {
 
 Morebits.wiki = {};
 
-// Analyzes the HTML of the current page (i.e. no AJAX requests) to determine if it
-// is a redirect or soft redirect
+// Determines whether the current page is a redirect or soft redirect
+// (fails to detect soft redirects on edit, history, etc. pages)
 Morebits.wiki.isPageRedirect = function wikipediaIsPageRedirect() {
-	return !!($("span.redirectText").length > 0 || document.getElementById("softredirect"));
+	return !!(mw.config.get("wgIsRedirect") || document.getElementById("softredirect"));
 };
 
 
@@ -1234,7 +1325,7 @@ Morebits.wiki.isPageRedirect = function wikipediaIsPageRedirect() {
  * Use of Morebits.wiki.actionCompleted():
  *    Every call to Morebits.wiki.api.post() results in the dispatch of
  *    an asynchronous callback. Each callback can in turn
- *    make an additional call to Morebits.wiki.api.post() to continue a 
+ *    make an additional call to Morebits.wiki.api.post() to continue a
  *    processing sequence. At the conclusion of the final callback
  *    of a processing sequence, it is not possible to simply return to the
  *    original caller because there is no call stack leading back to
@@ -1245,7 +1336,7 @@ Morebits.wiki.isPageRedirect = function wikipediaIsPageRedirect() {
  *    The determination of when to call Morebits.wiki.actionCompleted.event()
  *    is managed through the globals Morebits.wiki.numberOfActionsLeft and
  *    Morebits.wiki.nbrOfCheckpointsLeft. Morebits.wiki.numberOfActionsLeft is
- *    incremented at the start of every Morebits.wiki.api call and decremented 
+ *    incremented at the start of every Morebits.wiki.api call and decremented
  *    after the completion of a callback function. If a callback function
  *    does not create a new Morebits.wiki.api object before exiting, it is the
  *    final step in the processing chain and Morebits.wiki.actionCompleted.event()
@@ -1254,7 +1345,7 @@ Morebits.wiki.isPageRedirect = function wikipediaIsPageRedirect() {
  *    Optionally, callers may use Morebits.wiki.addCheckpoint() to indicate that
  *    processing is not complete upon the conclusion of the final callback function.
  *    This is used for batch operations. The end of a batch is signaled by calling
- *    Morebits.wiki.removeCheckpoint(). 
+ *    Morebits.wiki.removeCheckpoint().
  */
 
 Morebits.wiki.numberOfActionsLeft = 0;
@@ -1272,7 +1363,7 @@ Morebits.wiki.actionCompleted.event = function() {
 	if( Morebits.wiki.actionCompleted.redirect ) {
 		// if it isn't a URL, make it one. TODO: This breaks on the articles 'http://', 'ftp://', and similar ones.
 		if( !( (/^\w+\:\/\//).test( Morebits.wiki.actionCompleted.redirect ) ) ) {
-			Morebits.wiki.actionCompleted.redirect = mw.util.wikiGetlink( Morebits.wiki.actionCompleted.redirect );
+			Morebits.wiki.actionCompleted.redirect = mw.util.getUrl( Morebits.wiki.actionCompleted.redirect );
 			if( Morebits.wiki.actionCompleted.followRedirect === false ) {
 				Morebits.wiki.actionCompleted.redirect += "?redirect=no";
 			}
@@ -1311,6 +1402,7 @@ Morebits.wiki.api = function( currentAction, query, onSuccess, statusElement, on
 	this.currentAction = currentAction;
 	this.query = query;
 	this.query.format = 'xml';
+	this.query.assert = 'user';
 	this.onSuccess = onSuccess;
 	this.onError = onError;
 	if( statusElement ) {
@@ -1345,9 +1437,14 @@ Morebits.wiki.api.prototype = {
 			type: 'POST',
 			url: mw.util.wikiScript('api'),
 			data: Morebits.queryString.create(this.query),
-			datatype: 'xml',
+			dataType: 'xml',
+			headers: {
+				'Api-User-Agent': morebitsWikiApiUserAgent
+			}
+		}, callerAjaxParameters );
 
-			success: function(xml, statusText, jqXHR) {
+		return $.ajax( ajaxparams ).done(
+			function(xml, statusText, jqXHR) {
 				this.statusText = statusText;
 				this.responseXML = xml;
 				this.errorCode = $(xml).find('error').attr('code');
@@ -1371,22 +1468,24 @@ Morebits.wiki.api.prototype = {
 				}
 
 				Morebits.wiki.actionCompleted();
-			},
-
+			}
+		).fail(
 			// only network and server errors reach here – complaints from the API itself are caught in success()
-			error: function(jqXHR, statusText, errorThrown) {
+			function(jqXHR, statusText, errorThrown) {
 				this.statusText = statusText;
 				this.errorThrown = errorThrown; // frequently undefined
 				this.errorText = statusText + ' "' + jqXHR.statusText + '" occurred while contacting the API.';
 				this.returnError();
 			}
-
-		}, callerAjaxParameters );
-
-		return $.ajax( ajaxparams );  // the return value should be ignored, unless using callerAjaxParameters with |async: false|
+		);  // the return value should be ignored, unless using callerAjaxParameters with |async: false|
 	},
 
 	returnError: function() {
+		if ( this.errorCode === "badtoken" ) {
+			this.statelem.error( "Invalid token. Refresh the page and try again" );
+		} else {
+			this.statelem.error( this.errorText );
+		}
 
 		// invoke failure callback if one was supplied
 		if (this.onError) {
@@ -1394,8 +1493,6 @@ Morebits.wiki.api.prototype = {
 			// set the callback context to this.parent for new code and supply the API object
 			// as the first argument to the callback for legacy code
 			this.onError.call( this.parent, this );
-		} else {
-			this.statelem.error( this.errorText );
 		}
 		// don't complete the action so that the error remains displayed
 	},
@@ -1415,6 +1512,15 @@ Morebits.wiki.api.prototype = {
 	getXML: function() {
 		return this.responseXML;
 	}
+};
+
+// Custom user agent header, used by WMF for server-side logging
+// See https://lists.wikimedia.org/pipermail/mediawiki-api-announce/2014-November/000075.html
+var morebitsWikiApiUserAgent = 'morebits.js/2.0 ([[w:WT:TW]])';
+
+// Sets the custom user agent header
+Morebits.wiki.api.setApiUserAgent = function( ua ) {
+	morebitsWikiApiUserAgent = ( ua ? ua + ' ' : '' ) + 'morebits.js/2.0 ([[w:WT:TW]])';
 };
 
 
@@ -1444,15 +1550,13 @@ Morebits.wiki.api.prototype = {
  * load(onSuccess, onFailure): Loads the text for the page
  *    onSuccess - callback function which is called when the load has succeeded
  *    onFailure - callback function which is called when the load fails (optional)
- *                XXX onFailure for load() is not yet implemented – do we need it? -- UncleDouggie
- *                    probably not -- TTO
  *
  * save(onSuccess, onFailure): Saves the text for the page. Must be preceded by calling load().
  *    onSuccess - callback function which is called when the save has succeeded (optional)
  *    onFailure - callback function which is called when the save fails (optional)
  *    Warning: Calling save() can result in additional calls to the previous load() callbacks to
- *             recover from edit conflicts! 
- *             In this case, callers must make the same edit to the new pageText and reinvoke save(). 
+ *             recover from edit conflicts!
+ *             In this case, callers must make the same edit to the new pageText and reinvoke save().
  *             This behavior can be disabled with setMaxConflictRetries(0).
  *
  * append(onSuccess, onFailure): Adds the text provided via setAppendText() to the end of the page.
@@ -1469,22 +1573,27 @@ Morebits.wiki.api.prototype = {
  *
  * getPageText(): returns a string containing the text of the page after a successful load()
  *
- * setPageText(pageText) 
+ * setPageText(pageText)
  *    pageText - string containing the updated page text that will be saved when save() is called
  *
- * setAppendText(appendText) 
+ * setAppendText(appendText)
  *    appendText - string containing the text that will be appended to the page when append() is called
  *
- * setPrependText(prependText) 
+ * setPrependText(prependText)
  *    prependText - string containing the text that will be prepended to the page when prepend() is called
  *
  * setEditSummary(summary)
  *    summary - string containing the text of the edit summary that will be used when save() is called
  *
- * setMinorEdit(minorEdit) 
+ * setMinorEdit(minorEdit)
  *    minorEdit is a boolean value:
  *       true  - When save is called, the resulting edit will be marked as "minor".
  *       false - When save is called, the resulting edit will not be marked as "minor". (default)
+ *
+ * setBotEdit(botEdit)
+ *    botEdit is a boolean value:
+ *       true  - When save is called, the resulting edit will be marked as "bot".
+ *       false - When save is called, the resulting edit will not be marked as "bot". (default)
  *
  * setPageSection(pageSection)
  *    pageSection - integer specifying the section number to load or save. The default is |null|, which means
@@ -1514,7 +1623,7 @@ Morebits.wiki.api.prototype = {
  * setFollowRedirect(followRedirect)
  *    followRedirect is a boolean value:
  *       true  - a maximum of one redirect will be followed.
- *               In the event of a redirect, a message is displayed to the user and 
+ *               In the event of a redirect, a message is displayed to the user and
  *               the redirect target can be retrieved with getPageName().
  *       false - the requested pageName will be used without regard to any redirect. (default)
  *
@@ -1525,7 +1634,7 @@ Morebits.wiki.api.prototype = {
  *
  * setWatchlistFromPreferences(watchlistOption)
  *    watchlistOption is a boolean value:
- *       true  - page watchlist status will be set based on the user's 
+ *       true  - page watchlist status will be set based on the user's
  *               preference settings when save() is called
  *       false - watchlist status of the page will not be changed (default)
  *
@@ -1553,10 +1662,12 @@ Morebits.wiki.api.prototype = {
  * lookupCreator(onSuccess): Retrieves the username of the user who created the page
  *    onSuccess - callback function which is called when the username is found
  *                within the callback, the username can be retrieved using the getCreator() function
- * 
+ *
  * getCreator(): returns the user who created the page following lookupCreator()
  *
- * patrol(): marks the page as patrolled (only when "rcid" is present in the query string)
+ * getCurrentID(): returns a string containing the current revision ID of the page
+ *
+ * patrol(): marks the page as patrolled, if possible
  *
  * move(onSuccess, onFailure): Moves a page to another title
  *
@@ -1568,25 +1679,25 @@ Morebits.wiki.api.prototype = {
  * Call sequence for common operations (optional final user callbacks not shown):
  *
  *    Edit current contents of a page (no edit conflict):
- *       .load(userTextEditCallback) -> ctx.loadApi.post() -> ctx.loadApi.post.success() -> 
- *             ctx.fnLoadSuccess() -> userTextEditCallback() -> .save() -> 
+ *       .load(userTextEditCallback) -> ctx.loadApi.post() -> ctx.loadApi.post.success() ->
+ *             ctx.fnLoadSuccess() -> userTextEditCallback() -> .save() ->
  *             ctx.saveApi.post() -> ctx.loadApi.post.success() -> ctx.fnSaveSuccess()
  *
  *    Edit current contents of a page (with edit conflict):
- *       .load(userTextEditCallback) -> ctx.loadApi.post() -> ctx.loadApi.post.success() -> 
- *             ctx.fnLoadSuccess() -> userTextEditCallback() -> .save() -> 
+ *       .load(userTextEditCallback) -> ctx.loadApi.post() -> ctx.loadApi.post.success() ->
+ *             ctx.fnLoadSuccess() -> userTextEditCallback() -> .save() ->
  *             ctx.saveApi.post() -> ctx.loadApi.post.success() -> ctx.fnSaveError() ->
- *             ctx.loadApi.post() -> ctx.loadApi.post.success() -> 
- *             ctx.fnLoadSuccess() -> userTextEditCallback() -> .save() -> 
+ *             ctx.loadApi.post() -> ctx.loadApi.post.success() ->
+ *             ctx.fnLoadSuccess() -> userTextEditCallback() -> .save() ->
  *             ctx.saveApi.post() -> ctx.loadApi.post.success() -> ctx.fnSaveSuccess()
  *
  *    Append to a page (similar for prepend):
- *       .append() -> ctx.loadApi.post() -> ctx.loadApi.post.success() -> 
- *             ctx.fnLoadSuccess() -> ctx.fnAutoSave() -> .save() -> 
+ *       .append() -> ctx.loadApi.post() -> ctx.loadApi.post.success() ->
+ *             ctx.fnLoadSuccess() -> ctx.fnAutoSave() -> .save() ->
  *             ctx.saveApi.post() -> ctx.loadApi.post.success() -> ctx.fnSaveSuccess()
  *
- *    Notes: 
- *       1. All functions following Morebits.wiki.api.post() are invoked asynchronously 
+ *    Notes:
+ *       1. All functions following Morebits.wiki.api.post() are invoked asynchronously
  *          from the jQuery AJAX library.
  *       2. The sequence for append/prepend could be slightly shortened, but it would require
  *          significant duplication of code for little benefit.
@@ -1607,31 +1718,38 @@ Morebits.wiki.page = function(pageName, currentAction) {
 	var ctx = {
 		 // backing fields for public properties
 		pageName: pageName,
+		pageExists: false,
+		editSummary: null,
+		callbackParameters: null,
+		statusElement: new Morebits.status(currentAction),
+		 // - edit
 		pageText: null,
 		editMode: 'all',  // save() replaces entire contents of the page by default
 		appendText: null,   // can't reuse pageText for this because pageText is needed to follow a redirect
 		prependText: null,  // can't reuse pageText for this because pageText is needed to follow a redirect
-		editSummary: null,
 		createOption: null,
 		minorEdit: false,
+		botEdit: false,
 		pageSection: null,
 		maxConflictRetries: 2,
 		maxRetries: 2,
-		callbackParameters: null,
-		statusElement: new Morebits.status(currentAction),
 		followRedirect: false,
 		watchlistOption: 'nochange',
-		pageExists: false,
 		creator: null,
+		 // - revert
 		revertOldID: null,
+		 // - move
 		moveDestination: null,
 		moveTalkPage: false,
 		moveSubpages: false,
 		moveSuppressRedirect: false,
+		 // - protect
 		protectEdit: null,
 		protectMove: null,
 		protectCreate: null,
 		protectCascade: false,
+		 // - stabilize (FlaggedRevs)
+		flaggedRevs: null,
 		 // internal status
 		pageLoaded: false,
 		editToken: null,
@@ -1640,6 +1758,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		revertCurID: null,
 		revertUser: null,
 		fullyProtected: false,
+		suppressProtectWarning: false,
 		conflictRetries: 0,
 		retries: 0,
 		 // callbacks
@@ -1654,6 +1773,8 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		onDeleteFailure: null,
 		onProtectSuccess: null,
 		onProtectFailure: null,
+		onStabilizeSuccess: null,
+		onStabilizeFailure: null,
 		 // internal objects
 		loadQuery: null,
 		loadApi: null,
@@ -1664,8 +1785,12 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		deleteApi: null,
 		deleteProcessApi: null,
 		protectApi: null,
-		protectProcessApi: null
+		protectProcessApi: null,
+		stabilizeApi: null,
+		stabilizeProcessApi: null
 	};
+
+	var emptyFunction = function() { };
 
 	/**
 	 * Public interface accessors
@@ -1705,6 +1830,10 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		ctx.minorEdit = minorEdit;
 	};
 
+	this.setBotEdit = function(botEdit) {
+		ctx.botEdit = botEdit;
+	};
+
 	this.setPageSection = function(pageSection) {
 		ctx.pageSection = pageSection;
 	};
@@ -1731,6 +1860,10 @@ Morebits.wiki.page = function(pageName, currentAction) {
 
 	this.setOldID = function(oldID) {
 		ctx.revertOldID = oldID;
+	};
+
+	this.getCurrentID = function() {
+		return ctx.revertCurID;
 	};
 
 	this.getRevisionUser = function() {
@@ -1769,6 +1902,10 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		ctx.protectCascade = !!flag;
 	};
 
+	this.setFlaggedRevs = function(level, expiry) {
+		ctx.flaggedRevs = { level: level, expiry: expiry };
+	};
+
 	this.getStatusElement = function() {
 		return ctx.statusElement;
 	};
@@ -1797,17 +1934,22 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		}
 	};
 
+	this.suppressProtectWarning = function() {
+		ctx.suppressProtectWarning = true;
+	};
+
 	this.exists = function() {
 		return ctx.pageExists;
 	};
 
 	this.load = function(onSuccess, onFailure) {
 		ctx.onLoadSuccess = onSuccess;
-		ctx.onLoadFailure = onFailure;
+		ctx.onLoadFailure = onFailure || emptyFunction;
 
 		// Need to be able to do something after the page loads
 		if (!onSuccess) {
 			ctx.statusElement.error("Internal error: no onSuccess callback provided to load()!");
+			ctx.onLoadFailure(this);
 			return;
 		}
 
@@ -1820,8 +1962,9 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		};
 
 		if (ctx.editMode === 'all') {
-			ctx.loadQuery.rvprop = 'content';  // get the page content at the same time, if needed
+			ctx.loadQuery.rvprop = 'content|timestamp';  // get the page content at the same time, if needed
 		} else if (ctx.editMode === 'revert') {
+			ctx.loadQuery.rvprop = 'timestamp';
 			ctx.loadQuery.rvlimit = 1;
 			ctx.loadQuery.rvstartid = ctx.revertOldID;
 		}
@@ -1836,7 +1979,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			ctx.loadQuery.inprop = 'protection';
 		}
 
-		ctx.loadApi = new Morebits.wiki.api("Retrieving page...", ctx.loadQuery, fnLoadSuccess, ctx.statusElement);
+		ctx.loadApi = new Morebits.wiki.api("Retrieving page...", ctx.loadQuery, fnLoadSuccess, ctx.statusElement, ctx.onLoadFailure);
 		ctx.loadApi.setParent(this);
 		ctx.loadApi.post();
 	};
@@ -1844,31 +1987,40 @@ Morebits.wiki.page = function(pageName, currentAction) {
 	// Save updated .pageText to Wikipedia
 	// Only valid after successful .load()
 	this.save = function(onSuccess, onFailure) {
-		if (!ctx.pageLoaded) {
+		ctx.onSaveSuccess = onSuccess;
+		ctx.onSaveFailure = onFailure || emptyFunction;
+
+		// are we getting our edit token from mw.user.tokens?
+		var canUseMwUserToken = fnCanUseMwUserToken('edit');
+
+		if (!ctx.pageLoaded && !canUseMwUserToken) {
 			ctx.statusElement.error("Internal error: attempt to save a page that has not been loaded!");
+			ctx.onSaveFailure(this);
 			return;
 		}
 		if (!ctx.editSummary) {
 			ctx.statusElement.error("Internal error: edit summary not set before save!");
+			ctx.onSaveFailure(this);
 			return;
 		}
 
-		if (ctx.fullyProtected && !confirm('You are about to make an edit to the fully protected page "' + ctx.pageName +
+		// shouldn't happen if canUseMwUserToken === true
+		if (ctx.fullyProtected && !ctx.suppressProtectWarning &&
+			!confirm('You are about to make an edit to the fully protected page "' + ctx.pageName +
 			(ctx.fullyProtected === 'infinity' ? '" (protected indefinitely)' : ('" (protection expiring ' + ctx.fullyProtected + ')')) +
 			'.  \n\nClick OK to proceed with the edit, or Cancel to skip this edit.')) {
 			ctx.statusElement.error("Edit to fully protected page was aborted.");
+			ctx.onSaveFailure(this);
 			return;
 		}
 
-		ctx.onSaveSuccess = onSuccess;
-		ctx.onSaveFailure = onFailure;
 		ctx.retries = 0;
 
 		var query = {
 			action: 'edit',
 			title: ctx.pageName,
 			summary: ctx.editSummary,
-			token: ctx.editToken,
+			token: canUseMwUserToken ? mw.user.tokens.get('editToken') : ctx.editToken,
 			watchlist: ctx.watchlistOption
 		};
 
@@ -1881,6 +2033,11 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			query.minor = true;
 		} else {
 			query.notminor = true;  // force Twinkle config to override user preference setting for "all edits are minor"
+		}
+
+		// Set bot edit attribute. If this paramter is present with any value, it is interpreted as true
+		if (ctx.botEdit) {
+			query.bot = true;
 		}
 
 		switch (ctx.editMode) {
@@ -1911,6 +2068,10 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			query[ctx.createOption] = '';
 		}
 
+		if (canUseMwUserToken && ctx.followRedirect) {
+			query.redirect = true;
+		}
+
 		ctx.saveApi = new Morebits.wiki.api( "Saving page...", query, fnSaveSuccess, ctx.statusElement, fnSaveError);
 		ctx.saveApi.setParent(this);
 		ctx.saveApi.post();
@@ -1918,16 +2079,26 @@ Morebits.wiki.page = function(pageName, currentAction) {
 
 	this.append = function(onSuccess, onFailure) {
 		ctx.editMode = 'append';
-		ctx.onSaveSuccess = onSuccess;
-		ctx.onSaveFailure = onFailure;
-		this.load(fnAutoSave, onFailure);
+
+		if (fnCanUseMwUserToken('edit')) {
+			this.save(onSuccess, onFailure);
+		} else {
+			ctx.onSaveSuccess = onSuccess;
+			ctx.onSaveFailure = onFailure || emptyFunction;
+			this.load(fnAutoSave, ctx.onSaveFailure);
+		}
 	};
 
 	this.prepend = function(onSuccess, onFailure) {
 		ctx.editMode = 'prepend';
-		ctx.onSaveSuccess = onSuccess;
-		ctx.onSaveFailure = onFailure;
-		this.load(fnAutoSave, onFailure);
+
+		if (fnCanUseMwUserToken('edit')) {
+			this.save(onSuccess, onFailure);
+		} else {
+			ctx.onSaveSuccess = onSuccess;
+			ctx.onSaveFailure = onFailure || emptyFunction;
+			this.load(fnAutoSave, ctx.onSaveFailure);
+		}
 	};
 
 	this.lookupCreator = function(onSuccess) {
@@ -1945,66 +2116,69 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			'rvprop': 'user',
 			'rvdir': 'newer'
 		};
-		
+
 		if (ctx.followRedirect) {
 			query.redirects = '';  // follow all redirects
 		}
-		
+
 		ctx.lookupCreatorApi = new Morebits.wiki.api("Retrieving page creator information", query, fnLookupCreatorSuccess, ctx.statusElement);
 		ctx.lookupCreatorApi.setParent(this);
 		ctx.lookupCreatorApi.post();
 	};
 
 	this.patrol = function() {
-		// look for rcid in querystring; if not, we won't have a patrol token, so no point trying
-		if (!Morebits.queryString.exists("rcid")) {
+		// There's no patrol link on page, so we can't patrol
+		if ( !$( '.patrollink' ).length ) {
 			return;
 		}
-		var rcid = Morebits.queryString.get("rcid");
 
-		// extract patrol token from "Mark page as patrolled" link on page
-		var patrollinkmatch = /token=(.+)%2B%5C$/.exec($(".patrollink a").attr("href"));
-		if (patrollinkmatch) {
-			var patroltoken = patrollinkmatch[1] + "+\\";
-			var patrolstat = new Morebits.status("Marking page as patrolled");
+		// Extract the rcid token from the "Mark page as patrolled" link on page
+		var patrolhref = $( '.patrollink a' ).attr( 'href' ),
+			rcid = mw.util.getParamValue( 'rcid', patrolhref );
 
-			var wikipedia_api = new Morebits.wiki.api("doing...", {
-				title: ctx.pageName,
-				action: 'markpatrolled',
+		if ( rcid ) {
+
+			var patrolstat = new Morebits.status( 'Marking page as patrolled' );
+
+			var wikipedia_api = new Morebits.wiki.api( 'doing...', {
+				action: 'patrol',
 				rcid: rcid,
-				token: patroltoken
-			}, null, patrolstat);
-			wikipedia_api.post({
-				type: 'GET',
-				url: mw.util.wikiScript('index'),
-				datatype: 'text'  // we don't really care about the response
-			});
+				token: mw.user.tokens.get( 'patrolToken' )
+			}, null, patrolstat );
+
+			// We don't really care about the response
+			wikipedia_api.post();
 		}
 	};
 
 	this.revert = function(onSuccess, onFailure) {
+		ctx.onSaveSuccess = onSuccess;
+		ctx.onSaveFailure = onFailure || emptyFunction;
+
 		if (!ctx.revertOldID) {
 			ctx.statusElement.error("Internal error: revision ID to revert to was not set before revert!");
+			ctx.onSaveFailure(this);
 			return;
 		}
+
 		ctx.editMode = 'revert';
-		ctx.onSaveSuccess = onSuccess;
-		ctx.onSaveFailure = onFailure;
-		this.load(fnAutoSave, onFailure);
+		this.load(fnAutoSave, ctx.onSaveFailure);
 	};
 
 	this.move = function(onSuccess, onFailure) {
+		ctx.onMoveSuccess = onSuccess;
+		ctx.onMoveFailure = onFailure || emptyFunction;
+
 		if (!ctx.editSummary) {
 			ctx.statusElement.error("Internal error: move reason not set before move (use setEditSummary function)!");
+			ctx.onMoveFailure(this);
 			return;
 		}
 		if (!ctx.moveDestination) {
 			ctx.statusElement.error("Internal error: destination page name was not set before move!");
+			ctx.onMoveFailure(this);
 			return;
 		}
-
-		ctx.onMoveSuccess = onSuccess;
-		ctx.onMoveFailure = onFailure;
 
 		var query = {
 			action: 'query',
@@ -2019,81 +2193,165 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			query.inprop = 'protection';
 		}
 
-		ctx.moveApi = new Morebits.wiki.api("retrieving move token...", query, fnProcessMove, ctx.statusElement);
+		ctx.moveApi = new Morebits.wiki.api("retrieving move token...", query, fnProcessMove, ctx.statusElement, ctx.onMoveFailure);
 		ctx.moveApi.setParent(this);
 		ctx.moveApi.post();
 	};
 
 	// |delete| is a reserved word in some flavours of JS
 	this.deletePage = function(onSuccess, onFailure) {
+		ctx.onDeleteSuccess = onSuccess;
+		ctx.onDeleteFailure = onFailure || emptyFunction;
+
 		// if a non-admin tries to do this, don't bother
 		if (!Morebits.userIsInGroup('sysop')) {
 			ctx.statusElement.error("Cannot delete page: only admins can do that");
+			ctx.onDeleteFailure(this);
 			return;
 		}
 		if (!ctx.editSummary) {
 			ctx.statusElement.error("Internal error: delete reason not set before delete (use setEditSummary function)!");
+			ctx.onDeleteFailure(this);
 			return;
 		}
 
-		ctx.onDeleteSuccess = onSuccess;
-		ctx.onDeleteFailure = onFailure;
+		if (fnCanUseMwUserToken('delete')) {
+			fnProcessDelete.call(this, this);
+		} else {
+			var query = {
+				action: 'query',
+				prop: 'info',
+				inprop: 'protection',
+				intoken: 'delete',
+				titles: ctx.pageName
+			};
+			if (ctx.followRedirect) {
+				query.redirects = '';  // follow all redirects
+			}
 
-		var query = {
-			action: 'query',
-			prop: 'info',
-			inprop: 'protection',
-			intoken: 'delete',
-			titles: ctx.pageName
-		};
-		if (ctx.followRedirect) {
-			query.redirects = '';  // follow all redirects
+			ctx.deleteApi = new Morebits.wiki.api("retrieving delete token...", query, fnProcessDelete, ctx.statusElement, ctx.onDeleteFailure);
+			ctx.deleteApi.setParent(this);
+			ctx.deleteApi.post();
 		}
-
-		ctx.deleteApi = new Morebits.wiki.api("retrieving delete token...", query, fnProcessDelete, ctx.statusElement);
-		ctx.deleteApi.setParent(this);
-		ctx.deleteApi.post();
 	};
 
 	this.protect = function(onSuccess, onFailure) {
+		ctx.onProtectSuccess = onSuccess;
+		ctx.onProtectFailure = onFailure || emptyFunction;
+
 		// if a non-admin tries to do this, don't bother
 		if (!Morebits.userIsInGroup('sysop')) {
 			ctx.statusElement.error("Cannot protect page: only admins can do that");
+			ctx.onProtectFailure(this);
 			return;
 		}
 		if (!ctx.protectEdit && !ctx.protectMove && !ctx.protectCreate) {
 			ctx.statusElement.error("Internal error: you must set edit and/or move and/or create protection before calling protect()!");
+			ctx.onProtectFailure(this);
 			return;
 		}
 		if (!ctx.editSummary) {
 			ctx.statusElement.error("Internal error: protection reason not set before protect (use setEditSummary function)!");
+			ctx.onProtectFailure(this);
 			return;
 		}
 
-		ctx.onProtectSuccess = onSuccess;
-		ctx.onProtectFailure = onFailure;
-
+		// because of the way MW API interprets protection levels (absolute, not
+		// differential), we need to request protection levels from the server
 		var query = {
 			action: 'query',
 			prop: 'info',
 			inprop: 'protection',
 			intoken: 'protect',
+			titles: ctx.pageName,
+			watchlist: ctx.watchlistOption
+		};
+		if (ctx.followRedirect) {
+			query.redirects = '';  // follow all redirects
+		}
+
+		ctx.protectApi = new Morebits.wiki.api("retrieving protect token...", query, fnProcessProtect, ctx.statusElement, ctx.onProtectFailure);
+		ctx.protectApi.setParent(this);
+		ctx.protectApi.post();
+	};
+
+	// apply FlaggedRevs protection-style settings
+	// only works where $wgFlaggedRevsProtection = true (i.e. where FlaggedRevs
+	// settings appear on the wiki's "protect" tab)
+	this.stabilize = function(onSuccess, onFailure) {
+		ctx.onStabilizeSuccess = onSuccess;
+		ctx.onStabilizeFailure = onFailure || emptyFunction;
+
+		// if a non-admin tries to do this, don't bother
+		if (!Morebits.userIsInGroup('sysop')) {
+			ctx.statusElement.error("Cannot apply FlaggedRevs settings: only admins can do that");
+			ctx.onStabilizeFailure(this);
+			return;
+		}
+		if (!ctx.flaggedRevs) {
+			ctx.statusElement.error("Internal error: you must set flaggedRevs before calling stabilize()!");
+			ctx.onStabilizeFailure(this);
+			return;
+		}
+		if (!ctx.editSummary) {
+			ctx.statusElement.error("Internal error: reason not set before calling stabilize() (use setEditSummary function)!");
+			ctx.onStabilizeFailure(this);
+			return;
+		}
+
+		var query = {
+			action: 'query',
+			prop: 'info|flagged',
+			intoken: 'edit',
 			titles: ctx.pageName
 		};
 		if (ctx.followRedirect) {
 			query.redirects = '';  // follow all redirects
 		}
 
-		ctx.protectApi = new Morebits.wiki.api("retrieving protect token...", query, fnProcessProtect, ctx.statusElement);
-		ctx.protectApi.setParent(this);
-		ctx.protectApi.post();
+		ctx.stabilizeApi = new Morebits.wiki.api("retrieving stabilize token...", query, fnProcessStabilize, ctx.statusElement, ctx.onStabilizeFailure);
+		ctx.stabilizeApi.setParent(this);
+		ctx.stabilizeApi.post();
 	};
 
-	/**
-	 * Private member functions
+	/* Private member functions
 	 *
 	 * These are not exposed outside
 	 */
+
+	/**
+	 * Determines whether we can save an API call by using the edit token sent with the page
+	 * HTML, or whether we need to ask the server for more info (e.g. protection expiry).
+	 *
+	 * Currently only used for append, prepend, and deletePage.
+	 *
+	 * @param {string} action  The action being undertaken, e.g. "edit", "delete".
+	 */
+	var fnCanUseMwUserToken = function(action) {
+		// API-based redirect resolution only works for action=query and
+		// action=edit in append/prepend modes (and section=new, but we don't
+		// really support that)
+		if (ctx.followRedirect && (action !== 'edit' ||
+			(ctx.editMode !== 'append' && ctx.editMode !== 'prepend'))) {
+			return false;
+		}
+
+		// do we need to fetch the edit protection expiry?
+		if (Morebits.userIsInGroup('sysop') && !ctx.suppressProtectWarning) {
+			// poor man's normalisation
+			if (Morebits.string.toUpperCaseFirstChar(mw.config.get('wgPageName')).replace(/ /g, '_').trim() !==
+				Morebits.string.toUpperCaseFirstChar(ctx.pageName).replace(/ /g, '_').trim()) {
+				return false;
+			}
+
+			var editRestriction = mw.config.get('wgRestrictionEdit');
+			if (!editRestriction || editRestriction.indexOf('sysop') !== -1) {
+				return false;
+			}
+		}
+
+		return !!mw.user.tokens.get('editToken');
+	};
 
 	// callback from loadSuccess() for append() and prepend() threads
 	var fnAutoSave = function(pageobj) {
@@ -2104,7 +2362,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 	var fnLoadSuccess = function() {
 		var xml = ctx.loadApi.getXML();
 
-		if ( !fnCheckPageName(xml) ) {
+		if ( !fnCheckPageName(xml, ctx.onLoadFailure) ) {
 			return; // abort
 		}
 
@@ -2126,23 +2384,25 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		}
 
 		ctx.editToken = $(xml).find('page').attr('edittoken');
-		if (!ctx.editToken)
-		{
+		if (!ctx.editToken) {
 			ctx.statusElement.error("Failed to retrieve edit token.");
+			ctx.onLoadFailure(this);
 			return;
 		}
 		ctx.loadTime = $(xml).find('page').attr('starttimestamp');
-		if (!ctx.loadTime)
-		{
+		if (!ctx.loadTime) {
 			ctx.statusElement.error("Failed to retrieve start timestamp.");
+			ctx.onLoadFailure(this);
 			return;
 		}
-		ctx.lastEditTime = $(xml).find('page').attr('touched');
+		ctx.lastEditTime = $(xml).find('rev').attr('timestamp');
+		ctx.revertCurID = $(xml).find('page').attr('lastrevid');
 
 		if (ctx.editMode === 'revert') {
 			ctx.revertCurID = $(xml).find('rev').attr('revid');
 			if (!ctx.revertCurID) {
 				ctx.statusElement.error("Failed to retrieve current revision ID.");
+				ctx.onLoadFailure(this);
 				return;
 			}
 			ctx.revertUser = $(xml).find('rev').attr('user');
@@ -2151,6 +2411,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 					ctx.revertUser = "<username hidden>";
 				} else {
 					ctx.statusElement.error("Failed to retrieve user who made the revision.");
+					ctx.onLoadFailure(this);
 					return;
 				}
 			}
@@ -2165,18 +2426,22 @@ Morebits.wiki.page = function(pageName, currentAction) {
 	};
 
 	// helper function to parse the page name returned from the API
-	var fnCheckPageName = function(xml) {
-	
+	var fnCheckPageName = function(xml, onFailure) {
+		if (!onFailure) {
+			onFailure = emptyFunction;
+		}
+
 		// check for invalid titles
-		if ( $(xml).find('page').attr('invalid') ) {
-			ctx.statusElement.error("Attempt to edit a page with invalid title: " + ctx.pageName);
+		if ( $(xml).find('page').attr('invalid') === "" ) {
+			ctx.statusElement.error("The page title is invalid: " + ctx.pageName);
+			onFailure(this);
 			return false; // abort
 		}
 
 		// retrieve actual title of the page after normalization and redirects
 		if ( $(xml).find('page').attr('title') ) {
 			var resolvedName = $(xml).find('page').attr('title');
-			
+
 			// only notify user for redirects, not normalization
 			if ( $(xml).find('redirects').length > 0 ) {
 				Morebits.status.info("Info", "Redirected from " + ctx.pageName + " to " + resolvedName );
@@ -2186,6 +2451,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		else {
 			// could be a circular redirect or other problem
 			ctx.statusElement.error("Could not resolve redirects for: " + ctx.pageName);
+			onFailure(this);
 
 			// force error to stay on the screen
 			++Morebits.wiki.numberOfActionsLeft;
@@ -2201,11 +2467,11 @@ Morebits.wiki.page = function(pageName, currentAction) {
 
 		// see if the API thinks we were successful
 		if ($(xml).find('edit').attr('result') === "Success") {
-		
+
 			// real success
 			// default on success action - display link for edited page
 			var link = document.createElement('a');
-			link.setAttribute('href', mw.util.wikiGetlink(ctx.pageName) );
+			link.setAttribute('href', mw.util.getUrl(ctx.pageName) );
 			link.appendChild(document.createTextNode(ctx.pageName));
 			ctx.statusElement.info(['completed (', link, ')']);
 			if (ctx.onSaveSuccess) {
@@ -2213,26 +2479,38 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			}
 			return;
 		}
-		
+
 		// errors here are only generated by extensions which hook APIEditBeforeSave within MediaWiki
-		// Wikimedia wikis should only return spam blacklist errors and captchas
-		var blacklist = $(xml).find('edit').attr('spamblacklist');
+		// Wikimedia wikis should only return spam blacklist errors, captchas, and AbuseFilter messages
+		var $editNode = $(xml).find('edit');
+		var blacklist = $editNode.attr('spamblacklist');
 
 		if (blacklist) {
 			var code = document.createElement('code');
 			code.style.fontFamily = "monospace";
 			code.appendChild(document.createTextNode(blacklist));
 			ctx.statusElement.error(['Could not save the page because the URL ', code, ' is on the spam blacklist.']);
-		}
-		else if ( $(xml).find('captcha').length > 0 ) {
+		} else if ( $(xml).find('captcha').length > 0 ) {
 			ctx.statusElement.error("Could not save the page because the wiki server wanted you to fill out a CAPTCHA.");
-		}
-		else {
+		} else if ( $editNode.attr('code') === 'abusefilter-disallowed' ) {
+			ctx.statusElement.error('The edit was disallowed by the edit filter rule "' + $editNode.attr('info').substring(17) + '".');
+		} else if ( $editNode.attr('info').indexOf('Hit AbuseFilter:') === 0 ) {
+			var div = document.createElement('div');
+			div.className = "toccolours";
+			div.style.fontWeight = "normal";
+			div.style.color = "black";
+			div.innerHTML = $editNode.attr('warning');
+			ctx.statusElement.error([ 'The following warning was returned by the edit filter: ', div, 'If you wish to proceed with the edit, please carry it out again. This warning wil not appear a second time.' ]);
+			// XXX provide the user with a way to automatically retry the action if they so choose -
+			// I can't see how to do this without creating a UI dependency on Morebits.wiki.page though -- TTO
+		} else {
 			ctx.statusElement.error("Unknown error received from API while saving page");
 		}
-		
+
 		// force error to stay on the screen
 		++Morebits.wiki.numberOfActionsLeft;
+
+		ctx.onSaveFailure(this);
 	};
 
 	// callback from saveApi.post()
@@ -2242,7 +2520,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 
 		// check for edit conflict
 		if ( errorCode === "editconflict" && ctx.conflictRetries++ < ctx.maxConflictRetries ) {
-			 
+
 			// edit conflicts can occur when the page needs to be purged from the server cache
 			var purgeQuery = {
 				action: 'purge',
@@ -2253,17 +2531,25 @@ Morebits.wiki.page = function(pageName, currentAction) {
 			var result = purgeApi.post( { async: false } );  // just wait for it, result is for debugging
 
 			--Morebits.wiki.numberOfActionsLeft;  // allow for normal completion if retry succeeds
-			
+
 			ctx.statusElement.info("Edit conflict detected, reapplying edit");
-			ctx.loadApi.post(); // reload the page and reapply the edit
+			if (fnCanUseMwUserToken('edit')) {
+				ctx.saveApi.post(); // necessarily append or prepend, so this should work as desired
+			} else {
+				ctx.loadApi.post(); // reload the page and reapply the edit
+			}
 
 		// check for loss of edit token
 		// it's impractical to request a new token here, so invoke edit conflict logic when this happens
 		} else if ( errorCode === "notoken" && ctx.conflictRetries++ < ctx.maxConflictRetries ) {
-			 
+
 			ctx.statusElement.info("Edit token is invalid, retrying");
 			--Morebits.wiki.numberOfActionsLeft;  // allow for normal completion if retry succeeds
-			ctx.loadApi.post(); // reload
+			if (fnCanUseMwUserToken('edit')) {
+				this.load(fnAutoSave, ctx.onSaveFailure); // try the append or prepend again
+			} else {
+				ctx.loadApi.post(); // reload the page and reapply the edit
+			}
 
 		// check for network or server error
 		} else if ( errorCode === "undefined" && ctx.retries++ < ctx.maxRetries ) {
@@ -2291,7 +2577,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 
 	var fnLookupCreatorSuccess = function() {
 		var xml = ctx.lookupCreatorApi.getXML();
-		
+
 		if ( !fnCheckPageName(xml) ) {
 			return; // abort
 		}
@@ -2309,16 +2595,19 @@ Morebits.wiki.page = function(pageName, currentAction) {
 
 		if ($(xml).find('page').attr('missing') === "") {
 			ctx.statusElement.error("Cannot move the page, because it no longer exists");
+			ctx.onMoveFailure(this);
 			return;
 		}
 
 		// extract protection info
 		if (Morebits.userIsInGroup('sysop')) {
 			var editprot = $(xml).find('pr[type="edit"]');
-			if (editprot.length > 0 && editprot.attr('level') === 'sysop' && !confirm('You are about to move the fully protected page "' + ctx.pageName + 
+			if (editprot.length > 0 && editprot.attr('level') === 'sysop' && !ctx.suppressProtectWarning &&
+				!confirm('You are about to move the fully protected page "' + ctx.pageName +
 				(editprot.attr('expiry') === 'infinity' ? '" (protected indefinitely)' : ('" (protection expiring ' + editprot.attr('expiry') + ')')) +
 				'.  \n\nClick OK to proceed with the move, or Cancel to skip this move.')) {
 				ctx.statusElement.error("Move of fully protected page was aborted.");
+				ctx.onMoveFailure(this);
 				return;
 			}
 		}
@@ -2326,6 +2615,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		var moveToken = $(xml).find('page').attr('movetoken');
 		if (!moveToken) {
 			ctx.statusElement.error("Failed to retrieve move token.");
+			ctx.onMoveFailure(this);
 			return;
 		}
 
@@ -2355,41 +2645,91 @@ Morebits.wiki.page = function(pageName, currentAction) {
 	};
 
 	var fnProcessDelete = function() {
-		var xml = ctx.deleteApi.getXML();
+		var pageTitle, token;
 
-		if ($(xml).find('page').attr('missing') === "") {
-			ctx.statusElement.error("Cannot delete the page, because it no longer exists");
-			return;
-		}
+		if (fnCanUseMwUserToken('delete')) {
+			token = mw.user.tokens.get('editToken');
+			pageTitle = ctx.pageName;
+		} else {
+			var xml = ctx.deleteApi.getXML();
 
-		// extract protection info
-		var editprot = $(xml).find('pr[type="edit"]');
-		if (editprot.length > 0 && editprot.attr('level') === 'sysop' && !confirm('You are about to delete the fully protected page "' + ctx.pageName + 
-			(editprot.attr('expiry') === 'infinity' ? '" (protected indefinitely)' : ('" (protection expiring ' + editprot.attr('expiry') + ')')) +
-			'.  \n\nClick OK to proceed with the deletion, or Cancel to skip this deletion.')) {
-			ctx.statusElement.error("Deletion of fully protected page was aborted.");
-			return;
-		}
+			if ($(xml).find('page').attr('missing') === "") {
+				ctx.statusElement.error("Cannot delete the page, because it no longer exists");
+				ctx.onDeleteFailure(this);
+				return;
+			}
 
-		var deleteToken = $(xml).find('page').attr('deletetoken');
-		if (!deleteToken) {
-			ctx.statusElement.error("Failed to retrieve delete token.");
-			return;
+			// extract protection info
+			var editprot = $(xml).find('pr[type="edit"]');
+			if (editprot.length > 0 && editprot.attr('level') === 'sysop' && !ctx.suppressProtectWarning &&
+				!confirm('You are about to delete the fully protected page "' + ctx.pageName +
+				(editprot.attr('expiry') === 'infinity' ? '" (protected indefinitely)' : ('" (protection expiring ' + editprot.attr('expiry') + ')')) +
+				'.  \n\nClick OK to proceed with the deletion, or Cancel to skip this deletion.')) {
+				ctx.statusElement.error("Deletion of fully protected page was aborted.");
+				ctx.onDeleteFailure(this);
+				return;
+			}
+
+			token = $(xml).find('page').attr('deletetoken');
+			if (!token) {
+				ctx.statusElement.error("Failed to retrieve delete token.");
+				ctx.onDeleteFailure(this);
+				return;
+			}
+
+			pageTitle = $(xml).find('page').attr('title');
 		}
 
 		var query = {
 			'action': 'delete',
-			'title': $(xml).find('page').attr('title'),
-			'token': deleteToken,
+			'title': pageTitle,
+			'token': token,
 			'reason': ctx.editSummary
 		};
 		if (ctx.watchlistOption === 'watch') {
 			query.watch = 'true';
 		}
 
-		ctx.deleteProcessApi = new Morebits.wiki.api("deleting page...", query, ctx.onDeleteSuccess, ctx.statusElement, ctx.onDeleteFailure);
+		ctx.deleteProcessApi = new Morebits.wiki.api("deleting page...", query, ctx.onDeleteSuccess, ctx.statusElement, fnProcessDeleteError);
 		ctx.deleteProcessApi.setParent(this);
 		ctx.deleteProcessApi.post();
+	};
+
+	// callback from deleteProcessApi.post()
+	var fnProcessDeleteError = function() {
+
+		var errorCode = ctx.deleteProcessApi.getErrorCode();
+
+		// check for "Database query error"
+		if ( errorCode === "internal_api_error_DBQueryError" && ctx.retries++ < ctx.maxRetries ) {
+
+			ctx.statusElement.info("Database query error, retrying");
+			--Morebits.wiki.numberOfActionsLeft;  // allow for normal completion if retry succeeds
+			ctx.deleteProcessApi.post(); // give it another go!
+
+		} else if ( errorCode === "badtoken" ) {
+			// this is pathetic, but given the current state of Morebits.wiki.page it would
+			// be a dog's breakfast to try and fix this
+			ctx.statusElement.error("Invalid token. Please refresh the page and try again.");
+			if (ctx.onDeleteFailure) {
+				ctx.onDeleteFailure.call(this, this, ctx.deleteProcessApi);
+			}
+
+		} else if ( errorCode === "missingtitle" ) {
+
+			ctx.statusElement.error("Cannot delete the page, because it no longer exists");
+			if (ctx.onDeleteFailure) {
+				ctx.onDeleteFailure.call(this, ctx.deleteProcessApi);  // invoke callback
+			}
+
+		// hard error, give up
+		} else {
+
+			ctx.statusElement.error( "Failed to delete the page: " + ctx.deleteProcessApi.getErrorText() );
+			if (ctx.onDeleteFailure) {
+				ctx.onDeleteFailure.call(this, ctx.deleteProcessApi);  // invoke callback
+			}
+		}
 	};
 
 	var fnProcessProtect = function() {
@@ -2398,54 +2738,63 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		var missing = ($(xml).find('page').attr('missing') === "");
 		if (((ctx.protectEdit || ctx.protectMove) && missing)) {
 			ctx.statusElement.error("Cannot protect the page, because it no longer exists");
+			ctx.onProtectFailure(this);
 			return;
 		}
 		if (ctx.protectCreate && !missing) {
 			ctx.statusElement.error("Cannot create protect the page, because it already exists");
+			ctx.onProtectFailure(this);
 			return;
 		}
 
-		var editprot = $(xml).find('pr[type="edit"]');
-		// cascading protection not possible on edit<sysop
-		// XXX fix this logic - I can't wrap my head around it
-		//if (ctx.protectCascade && (editprot && editprot.attr('level') !== 'sysop') && (ctx.protectEdit && ctx.protectEdit.level !== 'sysop')) {
-		//	ctx.statusElement.error("Internal error: cascading protection requires sysop-level edit protection!");
-		//	return;
-		//}
+		// TODO cascading protection not possible on edit<sysop
 
 		var protectToken = $(xml).find('page').attr('protecttoken');
 		if (!protectToken) {
 			ctx.statusElement.error("Failed to retrieve protect token.");
+			ctx.onProtectFailure(this);
 			return;
 		}
 
-		var protections = '', expiry = '';
+		// fetch existing protection levels
+		var prs = $(xml).find('pr');
+		var editprot = prs.filter('[type="edit"]');
+		var moveprot = prs.filter('[type="move"]');
+		var createprot = prs.filter('[type="create"]');
+
+		var protections = [], expirys = [];
+
+		// set edit protection level
 		if (ctx.protectEdit) {
-			protections += 'edit=' + ctx.protectEdit.level;
-			expiry += ctx.protectEdit.expiry;
+			protections.push('edit=' + ctx.protectEdit.level);
+			expirys.push(ctx.protectEdit.expiry);
+		} else if (editprot.length) {
+			protections.push('edit=' + editprot.attr("level"));
+			expirys.push(editprot.attr("expiry").replace("infinity", "indefinite"));
 		}
-		if (ctx.protectMove) { 
-			if (ctx.protectEdit) {
-				protections += '|';
-				expiry += '|';
-			}
-			protections += 'move=' + ctx.protectMove.level;
-			expiry += ctx.protectMove.expiry;
+
+		if (ctx.protectMove) {
+			protections.push('move=' + ctx.protectMove.level);
+			expirys.push(ctx.protectMove.expiry);
+		} else if (moveprot.length) {
+			protections.push('move=' + moveprot.attr("level"));
+			expirys.push(moveprot.attr("expiry").replace("infinity", "indefinite"));
 		}
+
 		if (ctx.protectCreate) {
-			if (ctx.protectEdit || ctx.protectMove) {
-				protections += '|';
-				expiry += '|';
-			}
-			protections += 'create=' + ctx.protectCreate.level;
-			expiry += ctx.protectCreate.expiry;
+			protections.push('create=' + ctx.protectCreate.level);
+			expirys.push(ctx.protectCreate.expiry);
+		} else if (createprot.length) {
+			protections.push('create=' + createprot.attr("level"));
+			expirys.push(createprot.attr("expiry").replace("infinity", "indefinite"));
 		}
+
 		var query = {
 			action: 'protect',
 			title: $(xml).find('page').attr('title'),
 			token: protectToken,
-			protections: protections,
-			expiry: expiry,
+			protections: protections.join('|'),
+			expiry: expirys.join('|'),
 			reason: ctx.editSummary
 		};
 		if (ctx.protectCascade) {
@@ -2459,10 +2808,43 @@ Morebits.wiki.page = function(pageName, currentAction) {
 		ctx.protectProcessApi.setParent(this);
 		ctx.protectProcessApi.post();
 	};
+
+	var fnProcessStabilize = function() {
+		var xml = ctx.stabilizeApi.getXML();
+
+		var missing = ($(xml).find('page').attr('missing') === "");
+		if (missing) {
+			ctx.statusElement.error("Cannot protect the page, because it no longer exists");
+			ctx.onStabilizeFailure(this);
+			return;
+		}
+
+		var stabilizeToken = $(xml).find('page').attr('edittoken');
+		if (!stabilizeToken) {
+			ctx.statusElement.error("Failed to retrieve stabilize token.");
+			ctx.onStabilizeFailure(this);
+			return;
+		}
+
+		var query = {
+			action: 'stabilize',
+			title: $(xml).find('page').attr('title'),
+			token: stabilizeToken,
+			protectlevel: ctx.flaggedRevs.level,
+			expiry: ctx.flaggedRevs.expiry,
+			reason: ctx.editSummary
+		};
+		if (ctx.watchlistOption === 'watch') {
+			query.watch = 'true';
+		}
+
+		ctx.stabilizeProcessApi = new Morebits.wiki.api("configuring stabilization settings...", query, ctx.onStabilizeSuccess, ctx.statusElement, ctx.onStabilizeFailure);
+		ctx.stabilizeProcessApi.setParent(this);
+		ctx.stabilizeProcessApi.post();
+	};
 }; // end Morebits.wiki.page
 
 /** Morebits.wiki.page TODO: (XXX)
- * - Do we need the onFailure callbacks? How do we know when to call them? Timeouts? Enhance Morebits.wiki.api for failures?
  * - Should we retry loads also?
  * - Need to reset current action before the save?
  * - Deal with action.completed stuff
@@ -2481,6 +2863,7 @@ Morebits.wiki.page = function(pageName, currentAction) {
  * beginRender(wikitext): Displays the preview box, and begins an asynchronous attempt
  *                        to render the specified wikitext.
  *    wikitext - wikitext to render; most things should work, including subst: and ~~~~
+ *    pageTitle - optional parameter for the page this should be rendered as being on
  *
  * closePreview(): Hides the preview box and clears it.
  *
@@ -2494,7 +2877,7 @@ Morebits.wiki.preview = function(previewbox) {
 	this.previewbox = previewbox;
 	$(previewbox).addClass("morebits-previewbox").hide();
 
-	this.beginRender = function(wikitext) {
+	this.beginRender = function(wikitext, pageTitle) {
 		$(previewbox).show();
 
 		var statusspan = document.createElement('span');
@@ -2506,7 +2889,7 @@ Morebits.wiki.preview = function(previewbox) {
 			prop: 'text',
 			pst: 'true',  // PST = pre-save transform; this makes substitution work properly
 			text: wikitext,
-			title: mw.config.get('wgPageName')
+			title: pageTitle || mw.config.get('wgPageName')
 		};
 		var renderApi = new Morebits.wiki.api("loading...", query, fnRenderSuccess, new Morebits.status("Preview"));
 		renderApi.post();
@@ -2520,175 +2903,12 @@ Morebits.wiki.preview = function(previewbox) {
 			return;
 		}
 		previewbox.innerHTML = html;
+		$(previewbox).find("a").attr("target", "_blank");
 	};
 
 	this.closePreview = function() {
 		$(previewbox).empty().hide();
 	};
-};
-
-
-
-/**
- * **************** Morebits.wiki.legacyWiki ****************
- * REMOVEME - but *only* after Twinkle no longer uses it - viz. batchundelete :(
- */
-
-// we dump all XHR here so they won't loose props
-// REMOVEME after Morebits.wiki.legacyWiki is gone
-Morebits.wiki.dump = [];
-
-// editCount - REMOVEME when Morebits.wiki.legacyWiki is gone
-Morebits.wiki.editCount = 10;
-
-/*
- currentAction: text, the current action (required)
- query: Object, the query (required)
- oninit: function, the function to call when page gotten (required)
- onsuccess: function, a function to call when post succeeded
- onerror: function, a function to call when we abort failed posts
- onretry: function, a function to call when we try to retry a post
- */
-Morebits.wiki.legacyWiki = function( currentAction, query, oninit, onsuccess, onerror, onretry ) {
-
-	var node = document.createElement("div");
-	node.style.background = "#F9F9F9";
-	node.style.border = "1px solid maroon";
-	node.style.padding = "0.6em 0.8em";
-	node.style.margin = "0.5em";
-	node.style.fontSize = "small";
-	node.innerHTML = "<b>This user script is using the deprecated \"Morebits.wiki.legacyWiki\" class to edit the wiki. " +
-		"It may cease to function in the near future.</b><br />Please pass this message on to the script's maintainer, to ensure the script is upgraded.<br />" +
-		"(The developers of Twinkle are happy to assist script maintainers with updating scripts.)";
-	Morebits.status.warn(currentAction, [ node ]);
-
-	this.currentAction = currentAction;
-	this.query = query;
-	this.oninit = oninit;
-	this.onsuccess = onsuccess;
-	this.onerror = onerror;
-	this.onretry = onretry;
-	this.statelem = new Morebits.status( currentAction );
-	++Morebits.wiki.numberOfActionsLeft;
-};
-
-Morebits.wiki.legacyWiki.prototype = {
-	currentAction: '',
-	onsuccess: null,
-	onerror: null,
-	onretry: null,
-	oninit: null,
-	query: null,
-	postData: null,
-	responseXML: null,
-	statelem: null,
-	counter: 0,
-	post: function( data ) {
-		this.postData = data;
-		if( Morebits.wiki.editCount <= 0 ) {
-			this.query['maxlag'] = 10; // are we a bot?
-		} else {
-			--Morebits.wiki.editCount;
-		}
-
-		var xmlhttp = sajax_init_object();
-		Morebits.wiki.dump.push( xmlhttp );
-		xmlhttp.obj = this;
-		xmlhttp.overrideMimeType('text/xml');
-		xmlhttp.open( 'POST' , mw.config.get('wgServer') + mw.config.get('wgScriptPath') + '/index.php?useskin=monobook&' + Morebits.queryString.create( this.query ), true);
-		xmlhttp.setRequestHeader('Content-type','application/x-www-form-urlencoded');
-		xmlhttp.onerror = function(e) {
-			this.obj.statelem.error( "Error " + this.status + " occurred while posting the document." );
-		};
-		xmlhttp.onload = function(e) {
-			var self = this.obj;
-			var status = this.status;
-			if( status !== 200 ) {
-				if( status === 503 ) {
-					var retry = this.getResponseHeader( 'Retry-After' );
-					var lag = this.getResponseHeader( 'X-Database-Lag' );
-					if( lag ) {
-						self.statelem.warn( "current lag of " + lag + " seconds is more than our defined maximum lag of 10 seconds, will retry in " + retry + " seconds" );
-						window.setTimeout( function( self ) { self.post( self.postData ); }, retry * 1000, self );
-						return;
-					} else {
-						self.statelem.error( "Error " + status + " occurred while posting the document." );
-					}
-				}
-				return;
-			}
-			var xmlDoc;
-			xmlDoc = self.responseXML = this.responseXML;
-			var xpathExpr =  'boolean(//div[@class=\'previewnote\']/p/strong[contains(.,\'Sorry! We could not process your edit due to a loss of session data\')])';
-			var nosession = xmlDoc.evaluate( xpathExpr, xmlDoc, null, XPathResult.BOOLEAN_TYPE, null ).booleanValue;
-			if( nosession ) {
-				// Grabbing the shipping token, and repost
-				var new_token = xmlDoc.evaluate( '//input[@name="wfEditToken"]/@value', xmlDoc, null, XPathResult.STRING_TYPE, null ).stringValue;
-				self.postData['wfEditToken'] = new_token;
-				self.post( self.postData );
-			} else {
-				if( self.onsuccess ) {
-					self.onsuccess( self );
-				} else {
-					var link = document.createElement( 'a' );
-					link.setAttribute( 'href', mw.util.wikiGetlink(self.query['title']) );
-					link.setAttribute( 'title', self.query['title'] );
-					link.appendChild( document.createTextNode( self.query['title'] ) );
-
-					self.statelem.info( [ 'completed (' , link , ')' ] );
-				}
-				Morebits.wiki.actionCompleted();
-			}
-		};
-		xmlhttp.send( Morebits.queryString.create( this.postData ) );
-	},
-	get: function() {
-		this.onloading( this );
-		var redirect_query = {
-			'action': 'query',
-			'titles': this.query['title'],
-			'redirects': ''
-		};
-
-		var wikipedia_api = new Morebits.wiki.api( "resolving eventual redirect", redirect_query, this.postget, this.statelem );
-		wikipedia_api.parent = this;
-		wikipedia_api.post();
-	},
-	// note: this was updated in April 2011 to work with the revamped Morebits.wiki.api class.
-	// This was done so a lot of user scripts that use morebits didn't break down.
-	// But some deprecated technologies, like XPath and sajax, were kept intentionally, to
-	// discourage future consumers, and to not widen compatibility (i.e. doesn't work in IE9).
-	postget: function(apiobj) {
-		var xmlDoc = apiobj.getXML();
-		var to = xmlDoc.evaluate( '//redirects/r/@to', xmlDoc, null, XPathResult.STRING_TYPE, null ).stringValue;
-		if( !this.followRedirect ) {
-			this.statelem.info('ignoring eventual redirect');
-		} else if( to ) {
-			this.query['title'] = to;
-		}
-		this.onloading( this );
-		var xmlhttp = sajax_init_object();
-		Morebits.wiki.dump.push( xmlhttp );
-		xmlhttp.obj = this;
-		xmlhttp.overrideMimeType('text/xml');
-		xmlhttp.open( 'GET' , mw.config.get('wgServer') + mw.config.get('wgScriptPath') + '/index.php?useskin=monobook&' + Morebits.queryString.create( this.query ), true);
-		xmlhttp.onerror = function() {
-			this.obj.statelem.error( "Error " + this.status + " occurred while receiving the document." );
-		};
-		xmlhttp.onload = function() { 
-			this.obj.onloaded( this.obj );
-			this.obj.responseXML = this.responseXML;
-			this.obj.responseText = this.responseText;
-			this.obj.oninit( this.obj ); 
-		};
-		xmlhttp.send( null );
-	},
-	onloading: function() {
-		this.statelem.status( 'loading data...' );
-	},
-	onloaded: function() {
-		this.statelem.status( 'data loaded...' );
-	}
 };
 
 
@@ -2733,7 +2953,7 @@ Morebits.wikitext.template = {
 				++level;
 				continue;
 			}
-			if( test2 === '[[' ) {
+			if( test2 === ']]' ) {
 				current += test2;
 				++i;
 				--level;
@@ -2800,22 +3020,18 @@ Morebits.wikitext.page.prototype = {
 	text: '',
 	removeLink: function( link_target ) {
 		var first_char = link_target.substr( 0, 1 );
-		var link_re_string = "[" + first_char.toUpperCase() + first_char.toLowerCase() + ']' +  RegExp.escape( link_target.substr( 1 ), true );
-		var link_simple_re = new RegExp( "\\[\\[:?(" + link_re_string + ")\\|?\\]\\]", 'g' );
+		var link_re_string = "[" + first_char.toUpperCase() + first_char.toLowerCase() + ']' + RegExp.escape( link_target.substr( 1 ), true );
+		var link_simple_re = new RegExp( "\\[\\[:?(" + link_re_string + ")\\]\\]", 'g' );
 		var link_named_re = new RegExp( "\\[\\[:?" + link_re_string + "\\|(.+?)\\]\\]", 'g' );
-		if( link_simple_re.test(this.text) ) {
-			this.text = this.text.replace( link_simple_re, "$1" );
-		} else {
-			this.text = this.text.replace( link_named_re, "$1" );
-		}
+		this.text = this.text.replace( link_simple_re, "$1" ).replace( link_named_re, "$1" );
 	},
 	commentOutImage: function( image, reason ) {
 		var unbinder = new Morebits.unbinder( this.text );
 		unbinder.unbind( '<!--', '-->' );
 
-		reason = reason ? ' ' + reason + ': ' : '';
+		reason = reason ? (reason + ': ') : '';
 		var first_char = image.substr( 0, 1 );
-		var image_re_string = "[" + first_char.toUpperCase() + first_char.toLowerCase() + ']' +  RegExp.escape( image.substr( 1 ), true ); 
+		var image_re_string = "[" + first_char.toUpperCase() + first_char.toLowerCase() + ']' + RegExp.escape( image.substr( 1 ), true );
 
 		/*
 		 * Check for normal image links, i.e. [[Image:Foobar.png|...]]
@@ -2837,7 +3053,7 @@ Morebits.wikitext.page.prototype = {
 		 * Will eat the whole line.
 		 */
 		var gallery_image_re = new RegExp( "(^\\s*(?:[Ii]mage|[Ff]ile):\\s*" + image_re_string + ".*?$)", 'mg' );
-		unbinder.content.replace( gallery_image_re, "<!-- " + reason + "$1 -->" );
+		unbinder.content = unbinder.content.replace( gallery_image_re, "<!-- " + reason + "$1 -->" );
 
 		// unbind the newly created comments
 		unbinder.unbind( '<!--', '-->' );
@@ -2846,7 +3062,7 @@ Morebits.wikitext.page.prototype = {
 		 * Will only eat the image name and the preceeding bar and an eventual named parameter
 		 */
 		var free_image_re = new RegExp( "(\\|\\s*(?:[\\w\\s]+\\=)?\\s*(?:(?:[Ii]mage|[Ff]ile):\\s*)?" + image_re_string + ")", 'mg' );
-		unbinder.content.replace( free_image_re, "<!-- " + reason + "$1 -->" );
+		unbinder.content = unbinder.content.replace( free_image_re, "<!-- " + reason + "$1 -->" );
 
 		// Rebind the content now, we are done!
 		this.text = unbinder.rebind();
@@ -2874,7 +3090,7 @@ Morebits.wikitext.page.prototype = {
 	},
 	removeTemplate: function( template ) {
 		var first_char = template.substr( 0, 1 );
-		var template_re_string = "(?:[Tt]emplate:)?\\s*[" + first_char.toUpperCase() + first_char.toLowerCase() + ']' +  RegExp.escape( template.substr( 1 ), true ); 
+		var template_re_string = "(?:[Tt]emplate:)?\\s*[" + first_char.toUpperCase() + first_char.toLowerCase() + ']' + RegExp.escape( template.substr( 1 ), true );
 		var links_re = new RegExp( "\\{\\{" + template_re_string );
 		var allTemplates = Morebits.array.uniq(Morebits.string.splitWeightedByKeys( this.text, '{{', '}}', [ '{{{', '}}}' ] ));
 		for( var i = 0; i < allTemplates.length; ++i ) {
@@ -2905,7 +3121,7 @@ Morebits.wikitext.page.prototype = {
  * Morebits.queryString.toString()
  *     returns the query string as a string
  * Morebits.queryString.create( hash )
- *     creates an querystring and encodes strings via encodeURIComponent and joins arrays with | 
+ *     creates an querystring and encodes strings via encodeURIComponent and joins arrays with |
  *
  * In static context, the value of location.search.substring(1), else the value given to the constructor is going to be used. The mapped hash is saved in the object.
  *
@@ -2999,14 +3215,14 @@ Morebits.queryString.create = function( arr ) {
 		} else {
 			res = encodeURIComponent( arr[i] );
 		}
-		if( i === 'wpEditToken' ) {
+		if( i === 'token' ) {
 			editToken = res;
 		} else {
 			resarr.push( encodeURIComponent( i ) + '=' + res );
 		}
 	}
 	if( editToken !== undefined ) {
-		resarr.push( 'wpEditToken=' + editToken );
+		resarr.push( 'token=' + editToken );
 	}
 	return resarr.join('&');
 };
@@ -3019,20 +3235,12 @@ Morebits.queryString.prototype.create = Morebits.queryString.create;
  */
 
 Morebits.status = function Status( text, stat, type ) {
+	this.textRaw = text;
 	this.text = this.codify(text);
-	this.stat = this.codify(stat);
 	this.type = type || 'status';
-	if (type === 'error') {
-		// hack to force the page not to reload when an error is output - see also update() below
-		Morebits.wiki.numberOfActionsLeft = 1000;
-		// call error callback
-		if (Morebits.status.errorEvent) {
-			Morebits.status.errorEvent();
-		}
-	}
-	this.generate(); 
+	this.generate();
 	if( stat ) {
-		this.render();
+		this.update( stat, type );
 	}
 };
 
@@ -3060,6 +3268,7 @@ Morebits.status.onError = function( handler ) {
 Morebits.status.prototype = {
 	stat: null,
 	text: null,
+	textRaw: null,
 	type: 'status',
 	target: null,
 	node: null,
@@ -3102,6 +3311,10 @@ Morebits.status.prototype = {
 				// call error callback
 				if (Morebits.status.errorEvent) {
 					Morebits.status.errorEvent();
+				}
+				// also log error messages in the browser console
+				if (console && console.error) {
+					console.error(this.textRaw + ": " + status);
 				}
 			}
 		}
@@ -3148,6 +3361,20 @@ Morebits.status.error = function( text, status ) {
 	return new Morebits.status( text, status, 'error' );
 };
 
+// display the user's rationale, comments, etc. back to them after a failure,
+// so they don't use it
+Morebits.status.printUserText = function( comments, message ) {
+	var p = document.createElement( 'p' );
+	p.textContent = message;
+	var div = document.createElement( 'div' );
+	div.className = 'toccolours';
+	div.style.marginTop = '0';
+	div.style.whiteSpace = 'pre-wrap';
+	div.textContent = comments;
+	p.appendChild( div );
+	Morebits.status.root.appendChild( p );
+};
+
 
 
 /**
@@ -3162,7 +3389,238 @@ Morebits.htmlNode = function ( type, content, color ) {
 	}
 	node.appendChild( document.createTextNode( content ) );
 	return node;
-}
+};
+
+
+
+/**
+ * **************** Morebits.checkboxClickHandler() ****************
+ * shift-click-support for checkboxes
+ * wikibits version (window.addCheckboxClickHandlers) has some restrictions, and
+ * doesn't work with checkboxes inside a sortable table, so let's build our own.
+ */
+
+Morebits.checkboxShiftClickSupport = function (jQuerySelector, jQueryContext) {
+	var lastCheckbox = null;
+
+	function clickHandler(event) {
+		var cb = this;
+		if (event.shiftKey && lastCheckbox!==null)
+		{
+			var cbs = $(jQuerySelector, jQueryContext); //can't cache them, obviously, if we want to support resorting
+			var index=-1, lastIndex=-1;
+			for (var i=0; i<cbs.length; i++)
+			{
+				if (cbs[i]==cb) { index=i; if (lastIndex>-1) break; }
+				if (cbs[i]==lastCheckbox) { lastIndex=i; if (index>-1) break; }
+			}
+			if (index>-1 && lastIndex>-1)
+			{
+				//inspired by wikibits
+				var endState = cb.checked;
+				var start, finish;
+				if (index<lastIndex)
+				{
+					start = index+1;
+					finish = lastIndex;
+				}
+				else
+				{
+					start = lastIndex;
+					finish = index-1;
+				}
+				for (var i=start; i<=finish; i++) cbs[i].checked = endState;
+			}
+		}
+		lastCheckbox = cb;
+		return true;
+	}
+
+  $(jQuerySelector, jQueryContext).click(clickHandler);
+};
+
+
+
+/** **************** Morebits.batchOperation ****************
+ * Iterates over a group of pages and executes a worker function for each.
+ *
+ * Constructor: Morebits.batchOperation(currentAction)
+ *
+ * setPageList(wikitext): Sets the list of pages to work on.
+ *    It should be an array of page names (strings).
+ *
+ * setOption(optionName, optionValue): Sets a known option:
+ *    - chunkSize (integer): the size of chunks to break the array into (default 50).
+ *                           Setting this to a small value (<5) can cause problems.
+ *    - preserveIndividualStatusLines (boolean): keep each page's status element visible
+ *                                               when worker is complete?  See note below
+ *
+ * run(worker): Runs the given callback for each page in the list.
+ *    The callback must call workerSuccess when succeeding, or workerFailure
+ *    when failing.  If using Morebits.wiki.api or Morebits.wiki.page, this is easily
+ *    done by passing these two functions as parameters to the methods on those
+ *    objects, for instance, page.save(batchOp.workerSuccess, batchOp.workerFailure).
+ *    Make sure the methods are called directly if special success/failure cases arise.
+ *    If you omit to call these methods, the batch operation will stall after the first
+ *    chunk!  Also ensure that either workerSuccess or workerFailure is called no more
+ *    than once.
+ *
+ * If using preserveIndividualStatusLines, you should try to ensure that the
+ * workerSuccess callback has access to the page title.  This is no problem for
+ * Morebits.wiki.page objects.  But when using the API, please set the
+ * |pageName| property on the Morebits.wiki.api object.
+ *
+ * There are sample batchOperation implementations using Morebits.wiki.page in
+ * twinklebatchdelete.js, and using Morebits.wiki.api in twinklebatchundelete.js.
+ */
+
+Morebits.batchOperation = function(currentAction) {
+	var ctx = {
+		// backing fields for public properties
+		pageList: null,
+		options: {
+			chunkSize: 50,
+			preserveIndividualStatusLines: false
+		},
+
+		// internal counters, etc.
+		statusElement: new Morebits.status(currentAction || "Performing batch operation"),
+		worker: null,
+		countStarted: 0,
+		countFinished: 0,
+		countFinishedSuccess: 0,
+		currentChunkIndex: -1,
+		pageChunks: [],
+		running: false
+	};
+
+	// shouldn't be needed by external users, but provided anyway for maximum flexibility
+	this.getStatusElement = function() {
+		return ctx.statusElement;
+	};
+
+	this.setPageList = function(pageList) {
+		ctx.pageList = pageList;
+	};
+
+	this.setOption = function(optionName, optionValue) {
+		ctx.options[optionName] = optionValue;
+	};
+
+	this.run = function(worker) {
+		if (ctx.running) {
+			ctx.statusElement.error("Batch operation is already running");
+			return;
+		}
+		ctx.running = true;
+
+		ctx.worker = worker;
+		ctx.countStarted = 0;
+		ctx.countFinished = 0;
+		ctx.countFinishedSuccess = 0;
+		ctx.currentChunkIndex = -1;
+		ctx.pageChunks = [];
+
+		var total = ctx.pageList.length;
+		if (!total) {
+			ctx.statusElement.info("nothing to do");
+			ctx.running = false;
+			return;
+		}
+
+		// chunk page list into more manageable units
+		ctx.pageChunks = Morebits.array.chunk(ctx.pageList, ctx.options.chunkSize);
+
+		// start the process
+		Morebits.wiki.addCheckpoint();
+		ctx.statusElement.status("0%");
+		fnStartNewChunk();
+	};
+
+	this.workerSuccess = function(apiobj) {
+		// update or remove status line
+		if (apiobj && apiobj.getStatusElement) {
+			var statelem = apiobj.getStatusElement();
+			if (ctx.options.preserveIndividualStatusLines) {
+				if (apiobj.getPageName || apiobj.pageName || (apiobj.query && apiobj.query.title)) {
+					// we know the page title - display a relevant message
+					var pageName = apiobj.getPageName ? apiobj.getPageName() :
+						(apiobj.pageName || apiobj.query.title);
+					var link = document.createElement('a');
+					link.setAttribute('href', mw.util.getUrl(pageName));
+					link.appendChild(document.createTextNode(pageName));
+					statelem.info(['completed (', link, ')']);
+				} else {
+					// we don't know the page title - just display a generic message
+					statelem.info('done');
+				}
+			} else {
+				// remove the status line from display
+				statelem.unlink();
+			}
+		}
+
+		ctx.countFinishedSuccess++;
+		fnDoneOne(apiobj);
+	};
+
+	this.workerFailure = function(apiobj) {
+		fnDoneOne(apiobj);
+	};
+
+	// private functions
+
+	var thisProxy = this;
+
+	var fnStartNewChunk = function() {
+		var chunk = ctx.pageChunks[++ctx.currentChunkIndex];
+		if (!chunk) {
+			return;  // done! yay
+		}
+
+		// start workers for the current chunk
+		ctx.countStarted += chunk.length;
+		chunk.forEach(function(page) {
+			ctx.worker(page, thisProxy);
+		});
+	};
+
+	var fnDoneOne = function() {
+		ctx.countFinished++;
+
+		// update overall status line
+		var total = ctx.pageList.length;
+		if (ctx.countFinished === total) {
+			var statusString = "Done (" + ctx.countFinishedSuccess +
+				"/" + ctx.countFinished + " actions completed successfully)";
+			if (ctx.countFinishedSuccess < ctx.countFinished) {
+				ctx.statusElement.warn(statusString);
+			} else {
+				ctx.statusElement.info(statusString);
+			}
+			Morebits.wiki.removeCheckpoint();
+			ctx.running = false;
+			return;
+		}
+
+		// just for giggles! (well, serious debugging, actually)
+		if (ctx.countFinished > total) {
+			ctx.statusElement.warn("Done (overshot by " + (ctx.countFinished - total) + ")");
+			Morebits.wiki.removeCheckpoint();
+			ctx.running = false;
+			return;
+		}
+
+		ctx.statusElement.status(parseInt(100 * ctx.countFinished / total, 10) + "%");
+
+		// start a new chunk if we're close enough to the end of the previous chunk, and
+		// we haven't already started the next one
+		if (ctx.countFinished >= (ctx.countStarted - Math.max(ctx.options.chunkSize / 10, 2)) &&
+			Math.floor(ctx.countFinished / ctx.options.chunkSize) > ctx.currentChunkIndex) {
+			fnStartNewChunk();
+		}
+	};
+};
 
 
 
@@ -3177,6 +3635,7 @@ Morebits.simpleWindow = function SimpleWindow( width, height ) {
 	var content = document.createElement( 'div' );
 	this.content = content;
 	content.className = 'morebits-dialog-content';
+	content.id = 'morebits-dialog-content-' + Math.round(Math.random() * 1e15);
 
 	this.height = height;
 
@@ -3194,8 +3653,20 @@ Morebits.simpleWindow = function SimpleWindow( width, height ) {
 				// dialogs and their content can be destroyed once closed
 				$(event.target).dialog("destroy").remove();
 			},
+			resizeStart: function(event, ui) {
+				this.scrollbox = $(this).find(".morebits-scrollbox")[0];
+				if (this.scrollbox) {
+					this.scrollbox.style.maxHeight = "none";
+				}
+			},
+			resizeEnd: function(event, ui) {
+				this.scrollbox = null;
+			},
 			resize: function(event, ui) {
 				this.style.maxHeight = "";
+				if (this.scrollbox) {
+					this.scrollbox.style.width = "";
+				}
 			}
 		});
 
@@ -3217,6 +3688,9 @@ Morebits.simpleWindow = function SimpleWindow( width, height ) {
 	var linksspan = document.createElement("span");
 	linksspan.className = "morebits-dialog-footerlinks";
 	$widget.find(".ui-dialog-buttonpane").append(buttonspan, linksspan);
+
+	// resize the scrollbox with the dialog, if one is present
+	$widget.resizable("option", "alsoResize", "#" + this.content.id + " .morebits-scrollbox, #" + this.content.id);
 };
 
 Morebits.simpleWindow.prototype = {
@@ -3228,6 +3702,8 @@ Morebits.simpleWindow.prototype = {
 	// Focuses the dialog. This might work, or on the contrary, it might not.
 	focus: function(event) {
 		$(this.content).dialog("moveToTop");
+
+		return this;
 	},
 	// Closes the dialog.  If this is set as an event handler, it will stop the event from doing anything more.
 	close: function(event) {
@@ -3235,6 +3711,8 @@ Morebits.simpleWindow.prototype = {
 			event.preventDefault();
 		}
 		$(this.content).dialog("close");
+
+		return this;
 	},
 	// Shows the dialog.  Calling display() on a dialog that has previously been closed might work, but it is not guaranteed.
 	display: function() {
@@ -3253,19 +3731,27 @@ Morebits.simpleWindow.prototype = {
 			setupTooltips(dialog.parent()[0]);
 		}
 		this.setHeight( this.height );  // init height algorithm
+
+		return this;
 	},
 	// Sets the dialog title.
 	setTitle: function( title ) {
 		$(this.content).dialog("option", "title", title);
+
+		return this;
 	},
 	// Sets the script name, appearing as a prefix to the title to help users determine which
 	// user script is producing which dialog. For instance, Twinkle modules set this to "Twinkle".
 	setScriptName: function( name ) {
 		this.scriptName = name;
+
+		return this;
 	},
 	// Sets the dialog width.
 	setWidth: function( width ) {
 		$(this.content).dialog("option", "width", width);
+
+		return this;
 	},
 	// Sets the dialog's maximum height. The dialog will auto-size to fit its contents,
 	// but the content area will grow no larger than the height given here.
@@ -3281,6 +3767,8 @@ Morebits.simpleWindow.prototype = {
 			$(this.content).dialog("option", "height", "auto");
 		}
 		$(this.content).dialog("widget").find(".morebits-dialog-content")[0].style.maxHeight = parseInt(this.height - 30, 10) + "px";
+
+		return this;
 	},
 	// Sets the content of the dialog to the given element node, usually from rendering a Morebits.quickForm.
 	// Re-enumerates the footer buttons, but leaves the footer links as they are.
@@ -3288,6 +3776,8 @@ Morebits.simpleWindow.prototype = {
 	setContent: function( content ) {
 		this.purgeContent();
 		this.addContent( content );
+
+		return this;
 	},
 	addContent: function( content ) {
 		this.content.appendChild( content );
@@ -3308,8 +3798,10 @@ Morebits.simpleWindow.prototype = {
 		} else {
 			$(this.content).dialog("widget").find(".morebits-dialog-buttons")[0].setAttribute("data-empty", "data-empty");  // used by CSS
 		}
+
+		return this;
 	},
-	purgeContent: function( content ) {
+	purgeContent: function() {
 		this.buttons = [];
 		// delete all buttons in the buttonpane
 		$(this.content).dialog("widget").find(".morebits-dialog-buttons").empty();
@@ -3317,6 +3809,8 @@ Morebits.simpleWindow.prototype = {
 		while( this.content.hasChildNodes() ) {
 			this.content.removeChild( this.content.firstChild );
 		}
+
+		return this;
 	},
 	// Adds a link in the bottom-right corner of the dialog.
 	// This can be used to provide help or policy links.
@@ -3330,15 +3824,19 @@ Morebits.simpleWindow.prototype = {
 			$footerlinks.append(bullet);
 		}
 		var link = document.createElement("a");
-		link.setAttribute("href", mw.util.wikiGetlink(wikiPage) );
+		link.setAttribute("href", mw.util.getUrl(wikiPage) );
 		link.setAttribute("title", wikiPage);
 		link.setAttribute("target", "_blank");
 		link.textContent = text;
 		$footerlinks.append(link);
 		this.hasFooterLinks = true;
+
+		return this;
 	},
 	setModality: function( modal ) {
 		$(this.content).dialog("option", "modal", modal);
+
+		return this;
 	}
 };
 
@@ -3348,7 +3846,7 @@ Morebits.simpleWindow.prototype = {
 // Morebits.simpleWindow object sitting around somewhere. Anyway, most of the time there will only be one
 // Morebits.simpleWindow open, so this shouldn't matter.
 Morebits.simpleWindow.setButtonsEnabled = function( enabled ) {
-	$(".morebits-dialog-buttons button").attr("disabled", !enabled);
+	$(".morebits-dialog-buttons button").prop("disabled", !enabled);
 };
 
 
@@ -3368,7 +3866,7 @@ Morebits.simpleWindow.setButtonsEnabled = function( enabled ) {
  * Thanks.
  */
 
-if (typeof arguments === 'undefined') {  // typeof is here for a reason...
+if ( typeof arguments === "undefined" ) {  // typeof is here for a reason...
 	window.SimpleWindow = Morebits.simpleWindow;
 	window.QuickForm = Morebits.quickForm;
 	window.Wikipedia = Morebits.wiki;

@@ -1,3 +1,9 @@
+//<nowiki>
+
+
+(function($){
+
+
 /*
  ****************************************
  *** friendlywelcome.js: Welcome module
@@ -57,7 +63,10 @@ Twinkle.welcome.normal = function() {
 				var oHref = $oList.attr("href");
 
 				var oWelcomeNode = welcomeNode.cloneNode( true );
-				oWelcomeNode.firstChild.setAttribute( 'href', oHref + '&' + Morebits.queryString.create( { 'friendlywelcome': Twinkle.getFriendlyPref('quickWelcomeMode')==='auto'?'auto':'norm' } ) + '&' + Morebits.queryString.create( { 'vanarticle': mw.config.get( 'wgPageName' ).replace(/_/g, ' ') } ) );
+				oWelcomeNode.firstChild.setAttribute( 'href', oHref + '&' + Morebits.queryString.create( {
+						'friendlywelcome': Twinkle.getFriendlyPref('quickWelcomeMode') === 'auto' ? 'auto': 'norm',
+						'vanarticle': Morebits.pageNameNorm
+					} ) );
 				$oList[0].parentNode.parentNode.appendChild( document.createTextNode( ' ' ) );
 				$oList[0].parentNode.parentNode.appendChild( oWelcomeNode );
 			}
@@ -66,7 +75,10 @@ Twinkle.welcome.normal = function() {
 				var nHref = $nList.attr("href");
 
 				var nWelcomeNode = welcomeNode.cloneNode( true );
-				nWelcomeNode.firstChild.setAttribute( 'href', nHref + '&' + Morebits.queryString.create( { 'friendlywelcome': Twinkle.getFriendlyPref('quickWelcomeMode')==='auto'?'auto':'norm' } ) + '&' + Morebits.queryString.create( { 'vanarticle': mw.config.get( 'wgPageName' ).replace(/_/g, ' ') } ) );
+				nWelcomeNode.firstChild.setAttribute( 'href', nHref + '&' + Morebits.queryString.create( {
+						'friendlywelcome': Twinkle.getFriendlyPref('quickWelcomeMode') === 'auto' ? 'auto': 'norm',
+						'vanarticle': Morebits.pageNameNorm
+					} ) );
 				$nList[0].parentNode.parentNode.appendChild( document.createTextNode( ' ' ) );
 				$nList[0].parentNode.parentNode.appendChild( nWelcomeNode );
 			}
@@ -74,12 +86,13 @@ Twinkle.welcome.normal = function() {
 	}
 	if( mw.config.get( 'wgNamespaceNumber' ) === 3 ) {
 		var username = mw.config.get( 'wgTitle' ).split( '/' )[0].replace( /\"/, "\\\""); // only first part before any slashes
-		twAddPortletLink( function(){ Twinkle.welcome.callback(username); }, "Wel", "friendly-welcome", "Welcome user" );
+		Twinkle.addPortletLink( function(){ Twinkle.welcome.callback(username); }, "Wel", "friendly-welcome", "Welcome user" );
 	}
 };
 
 Twinkle.welcome.welcomeUser = function welcomeUser() {
-	Morebits.status.init( document.getElementById('bodyContent') );
+	Morebits.status.init( document.getElementById('mw-content-text') );
+	$( '#catlinks' ).remove();
 
 	var params = {
 		value: Twinkle.getFriendlyPref('quickWelcomeTemplate'),
@@ -122,7 +135,11 @@ Twinkle.welcome.callback = function friendlywelcomeCallback( uid ) {
 			]
 		});
 
-	form.append( { type: 'div', id: 'welcomeWorkArea' } );
+	form.append( {
+			type: 'div',
+			id: 'welcomeWorkArea',
+			className: 'morebits-scrollbox'
+		} );
 
 	form.append( {
 			type: 'input',
@@ -154,16 +171,12 @@ Twinkle.welcome.callback = function friendlywelcomeCallback( uid ) {
 
 Twinkle.welcome.populateWelcomeList = function(e) {
 	var type = e.target.value;
-	var $workarea = $(e.target.form).find("div#welcomeWorkArea");
 
-	var div = new Morebits.quickForm.element({
-		type: "div",
-		id: "welcomeWorkArea"
-	});
+	var container = new Morebits.quickForm.element({ type: "fragment" });
 
 	if ((type === "standard" || type === "anonymous") && Twinkle.getFriendlyPref("customWelcomeList").length) {
-		div.append({ type: 'header', label: 'Custom welcome templates' });
-		div.append({ 
+		container.append({ type: 'header', label: 'Custom welcome templates' });
+		container.append({
 			type: 'radio',
 			name: 'template',
 			list: Twinkle.getFriendlyPref("customWelcomeList"),
@@ -172,12 +185,12 @@ Twinkle.welcome.populateWelcomeList = function(e) {
 	}
 
 	var appendTemplates = function(list) {
-		div.append({ 
+		container.append({
 			type: 'radio',
 			name: 'template',
 			list: list.map(function(obj) {
 				var properties = Twinkle.welcome.templates[obj];
-				var result = (properties ? { 
+				var result = (properties ? {
 					value: obj,
 					label: "{{" + obj + "}}: " + properties.description + (properties.linkedArticle ? "\u00A0*" : ""),  // U+00A0 NO-BREAK SPACE
 					tooltip: properties.tooltip  // may be undefined
@@ -193,7 +206,7 @@ Twinkle.welcome.populateWelcomeList = function(e) {
 
 	switch (type) {
 		case "standard":
-			div.append({ type: 'header', label: 'General welcome templates' });
+			container.append({ type: 'header', label: 'General welcome templates' });
 			appendTemplates([
 				"welcome",
 				"welcome-short",
@@ -203,42 +216,48 @@ Twinkle.welcome.populateWelcomeList = function(e) {
 				"welcome-screen",
 				"welcome-belated",
 				"welcome student",
-				"welcome teacher"
+				"welcome teacher",
+				"welcome non-latin"
 			]);
-			div.append({ type: 'header', label: 'Problem user welcome templates' });
+			container.append({ type: 'header', label: 'Problem user welcome templates' });
 			appendTemplates([
 				"welcomelaws",
 				"first article",
+				"welcometest",
 				"welcomevandal",
 				"welcomenpov",
 				"welcomespam",
 				"welcomeunsourced",
 				"welcomeauto",
-				"welcome-COI"
+				"welcome-COI",
+				"welcome-delete",
+				"welcome-image"
 			]);
 			break;
 		case "anonymous":
-			div.append({ type: 'header', label: 'Anonymous user welcome templates' });
+			container.append({ type: 'header', label: 'Anonymous user welcome templates' });
 			appendTemplates([
 				"welcome-anon",
-				"welcome-anon-border",
 				"welcome-anon-test",
-				"welcome-anon-vandal",
-				"welcome-anon-constructive"
+				"welcome-anon-unconstructive",
+				"welcome-anon-constructive",
+				"welcome-anon-delete"
 			]);
 			break;
 		case "wikiProject":
-			div.append({ type: 'header', label: 'WikiProject-specific welcome templates' });
+			container.append({ type: 'header', label: 'WikiProject-specific welcome templates' });
 			appendTemplates([
+				"welcome-anatomy",
 				"welcome-au",
+				"welcome-bd",
 				"welcome-bio",
 				"welcome-cal",
 				"welcome-conserv",
 				"welcome-cycling",
 				"welcome-dbz",
 				"welcome-et",
-				"welcome-in",
 				"welcome-de",
+				"welcome-in",
 				"welcome-math",
 				"welcome-med",
 				"welcome-no",
@@ -251,13 +270,15 @@ Twinkle.welcome.populateWelcomeList = function(e) {
 				"welcome-starwars",
 				"welcome-ch",
 				"welcome-uk",
-				"welcome-videogames"
+				"welcome-videogames",
+				"TWA invite"
 			]);
 			break;
 		case "nonEnglish":
-			div.append({ type: 'header', label: 'Non-English welcome templates' });
+			container.append({ type: 'header', label: 'Non-English welcome templates' });
 			appendTemplates([
 				"welcomeen-sq",
+				"welcomeen-ar",
 				"welcomeen-zh",
 				"welcomeen-nl",
 				"welcomeen-fi",
@@ -277,13 +298,12 @@ Twinkle.welcome.populateWelcomeList = function(e) {
 			]);
 			break;
 		default:
-			div.append({ type: 'div', label: 'Twinkle.welcome.populateWelcomeList: something went wrong' });
+			container.append({ type: 'div', label: 'Twinkle.welcome.populateWelcomeList: something went wrong' });
 			break;
 	}
 
-	var rendered = div.render();
-	rendered.className = "quickform-scrollbox";
-	$workarea.replaceWith(rendered);
+	var rendered = container.render();
+	$(e.target.form).find("div#welcomeWorkArea").empty().append(rendered);
 
 	var firstRadio = e.target.form.template[0];
 	firstRadio.checked = true;
@@ -305,6 +325,8 @@ Twinkle.welcome.selectTemplate = function(e) {
 //   - $HEADER$    - adds a level 2 header (most templates already include this)
 
 Twinkle.welcome.templates = {
+	// GENERAL WELCOMES
+
 	"welcome": {
 		description: "standard welcome",
 		linkedArticle: true,
@@ -328,12 +350,12 @@ Twinkle.welcome.templates = {
 	"welcome-menu": {
 		description: "welcome message with large table of about 60 links",
 		linkedArticle: false,
-		syntax: "$HEADER$ {{subst:welcome-menu}}"
+		syntax: "{{subst:welcome-menu}}"
 	},
 	"welcome-screen": {
 		description: "welcome message with clear, annotated table of 10 links",
 		linkedArticle: false,
-		syntax: "$HEADER$ {{subst:welcome-screen}}"
+		syntax: "$HEADER$ {{subst:welcome-screen|static=true}}"
 	},
 	"welcome-belated": {
 		description: "welcome for users with more substantial contributions",
@@ -350,15 +372,28 @@ Twinkle.welcome.templates = {
 		linkedArticle: false,
 		syntax: "$HEADER$ {{subst:welcome teacher|$USERNAME$}} ~~~~"
 	},
+	"welcome non-latin": {
+		description: "welcome for users with a username containing non-Latin characters",
+		linkedArticle: false,
+		syntax: "{{subst:welcome non-latin|$USERNAME$}} ~~~~"
+	},
+
+	// PROBLEM USER WELCOMES
+
 	"welcomelaws": {
 		description: "welcome with information about copyrights, NPOV, the sandbox, and vandalism",
 		linkedArticle: false,
-		syntax: "{{subst:welcomelaws|$USERNAME$}}"
+		syntax: "{{subst:welcomelaws|$USERNAME$}} ~~~~"
 	},
 	"first article": {
 		description: "for someone whose first article did not meet page creation guidelines",
 		linkedArticle: true,
 		syntax: "{{subst:first article|$ARTICLE$|$USERNAME$}}"
+	},
+	"welcometest": {
+		description: "for someone whose initial efforts appear to be tests",
+		linkedArticle: true,
+		syntax: "{{subst:welcometest|$ARTICLE$|$USERNAME$}} ~~~~"
 	},
 	"welcomevandal": {
 		description: "for someone whose initial efforts appear to be vandalism",
@@ -390,6 +425,16 @@ Twinkle.welcome.templates = {
 		linkedArticle: true,
 		syntax: "{{subst:welcome-COI|$USERNAME$|art=$ARTICLE$}} ~~~~"
 	},
+	"welcome-delete": {
+		description: "for someone who has been removing information from articles",
+		linkedArticle: true,
+		syntax: "{{subst:welcome-delete|$ARTICLE$|$USERNAME$}} ~~~~"
+	},
+	"welcome-image": {
+		description: "welcome with additional information about images (policy and procedure)",
+		linkedArticle: true,
+		syntax: "{{subst:welcome-image|$USERNAME$|art=$ARTICLE$}}"
+	},
 
 	// ANONYMOUS USER WELCOMES
 
@@ -398,33 +443,43 @@ Twinkle.welcome.templates = {
 		linkedArticle: true,
 		syntax: "{{subst:welcome-anon|art=$ARTICLE$}} ~~~~"
 	},
-	"welcome-anon-border": {
-		description: "similar to {{welcome-anon}}, but has a border and uses clearer language",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-anon-border}}"
-	},
 	"welcome-anon-test": {
 		description: "for anonymous users who have performed test edits",
 		linkedArticle: true,
 		syntax: "{{subst:welcome-anon-test|$ARTICLE$|$USERNAME$}} ~~~~"
 	},
-	"welcome-anon-vandal": {
-		description: "for anonymous users who have vandalized a page",
+	"welcome-anon-unconstructive": {
+		description: "for anonymous users who have vandalized or made unhelpful edits",
 		linkedArticle: true,
-		syntax: "{{subst:welcome-anon-vandal|$ARTICLE$|$USERNAME$}}"
+		syntax: "{{subst:welcome-anon-unconstructive|$ARTICLE$|$USERNAME$}}"
 	},
 	"welcome-anon-constructive": {
-		description: "for anonymous users who fight vandalism and edit constructively",
+		description: "for anonymous users who fight vandalism or edit constructively",
 		linkedArticle: true,
 		syntax: "{{subst:welcome-anon-constructive|art=$ARTICLE$}}"
+	},
+	"welcome-anon-delete": {
+		description: "for anonymous users who have removed content from pages",
+		linkedArticle: true,
+		syntax: "{{subst:welcome-anon-delete|$ARTICLE$|$USERNAME$}} ~~~~"
 	},
 
 	// WIKIPROJECT-SPECIFIC WELCOMES
 
+	"welcome-anatomy": {
+		description: "welcome for users with an apparent interest in anatomy topics",
+		linkedArticle: false,
+		syntax: "{{subst:welcome-anatomy}} ~~~~"
+	},
 	"welcome-au": {
 		description: "welcome for users with an apparent interest in Australia topics",
 		linkedArticle: false,
 		syntax: "{{subst:welcome-au}} ~~~~"
+	},
+	"welcome-bd": {
+		description: "welcome for users with an apparent interest in Bangladesh topics",
+		linkedArticle: true,
+		syntax: "{{subst:welcome-bd|$USERNAME$||$EXTRA$|art=$ARTICLE$}} ~~~~"
 	},
 	"welcome-bio": {
 		description: "welcome for users with an apparent interest in biographical topics",
@@ -449,32 +504,32 @@ Twinkle.welcome.templates = {
 	"welcome-dbz": {
 		description: "welcome for users with an apparent interest in Dragon Ball topics",
 		linkedArticle: false,
-		syntax: "{{subst:welcome-dbz}}"
+		syntax: "{{subst:welcome-dbz|$EXTRA$|sig=~~~~}}"
 	},
 	"welcome-et": {
 		description: "welcome for users with an apparent interest in Estonia topics",
 		linkedArticle: false,
 		syntax: "{{subst:welcome-et}}"
 	},
-	"welcome-in": {
-		description: "welcome for users with an apparent interest in India topics",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-in}} ~~~~"
-	},
 	"welcome-de": {
 		description: "welcome for users with an apparent interest in Germany topics",
 		linkedArticle: false,
 		syntax: "{{subst:welcome-de}} ~~~~"
 	},
+	"welcome-in": {
+		description: "welcome for users with an apparent interest in India topics",
+		linkedArticle: true,
+		syntax: "{{subst:welcome-in|$USERNAME$|art=$ARTICLE$}} ~~~~"
+	},
 	"welcome-math": {
 		description: "welcome for users with an apparent interest in mathematical topics",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-math}} ~~~~"
+		linkedArticle: true,
+		syntax: "{{subst:welcome-math|$USERNAME$|art=$ARTICLE$}} ~~~~"
 	},
 	"welcome-med": {
 		description: "welcome for users with an apparent interest in medicine topics",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-med}} ~~~~"
+		linkedArticle: true,
+		syntax: "{{subst:welcome-med|$USERNAME$|art=$ARTICLE$}} ~~~~"
 	},
 	"welcome-no": {
 		description: "welcome for users with an apparent interest in Norway topics",
@@ -483,13 +538,13 @@ Twinkle.welcome.templates = {
 	},
 	"welcome-pk": {
 		description: "welcome for users with an apparent interest in Pakistan topics",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-pk}} ~~~~"
+		linkedArticle: true,
+		syntax: "{{subst:welcome-pk|$USERNAME$|art=$ARTICLE$}} ~~~~"
 	},
 	"welcome-phys": {
 		description: "welcome for users with an apparent interest in physics topics",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-phys}} ~~~~"
+		linkedArticle: true,
+		syntax: "{{subst:welcome-phys|$USERNAME$|art=$ARTICLE$}} ~~~~"
 	},
 	"welcome-pl": {
 		description: "welcome for users with an apparent interest in Poland topics",
@@ -513,8 +568,8 @@ Twinkle.welcome.templates = {
 	},
 	"welcome-ch": {
 		description: "welcome for users with an apparent interest in Switzerland topics",
-		linkedArticle: false,
-		syntax: "{{subst:welcome-ch}} ~~~~"
+		linkedArticle: true,
+		syntax: "{{subst:welcome-ch|$USERNAME$|art=$ARTICLE$}} ~~~~"
 	},
 	"welcome-uk": {
 		description: "welcome for users with an apparent interest in Ukraine topics",
@@ -531,9 +586,19 @@ Twinkle.welcome.templates = {
 		linkedArticle: false,
 		syntax: "{{subst:welcome-videogames}}"
 	},
+	"TWA invite": {
+		description: "invite the user to The Wikipedia Adventure (not a welcome template)",
+		linkedArticle: false,
+		syntax: "{{WP:TWA/Invite|signature=~~~~}}"
+	},
 
 	// NON-ENGLISH WELCOMES
 
+	"welcomeen-ar": {
+		description: "welcome for users whose first language appears to be Arabic",
+		linkedArticle: false,
+		syntax: "{{subst:welcomeen-ar}}"
+	},
 	"welcomeen-sq": {
 		description: "welcome for users whose first language appears to be Albanian",
 		linkedArticle: false,
@@ -630,7 +695,8 @@ Twinkle.welcome.getTemplateWikitext = function(template, article) {
 			replace(/\$HEADER\$\s*/, "== Welcome ==\n\n").
 			replace("$EXTRA$", "");  // EXTRA is not implemented yet
 	} else {
-		return "{{subst:" + template + (article ? ("|art=" + article) : "") + "}} ~~~~";
+		return "{{subst:" + template + (article ? ("|art=" + article) : "") + "}}" +
+			(Twinkle.getFriendlyPref("customWelcomeSignature") ? " ~~~~" : "");
 	}
 };
 
@@ -708,3 +774,7 @@ Twinkle.welcome.callback.evaluate = function friendlywelcomeCallbackEvaluate(e) 
 	wikipedia_page.setCallbackParameters(params);
 	wikipedia_page.load(Twinkle.welcome.callbacks.main);
 };
+})(jQuery);
+
+
+//</nowiki>
